@@ -73,7 +73,7 @@ extension AgentRuntimeKind {
         if Self.isStableAgentIdentity(self, displayName: "") {
             return false
         }
-        metadata?.presentation?.isBeta ?? true
+        return metadata?.presentation?.isBeta ?? true
     }
 
     /// Asset catalog name for this agent's bundled icon, by convention
