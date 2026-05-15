@@ -1304,7 +1304,7 @@ impl AppClient {
             if let Ok(resp) = exec_command_simple(
                 c.as_ref(),
                 &server_id,
-                &["/bin/sh", "-lc", r#"printf %s "$HOME""#],
+                &["/usr/bin/env", "sh", "-lc", r#"printf %s "$HOME""#],
                 Some("/tmp"),
             )
             .await
@@ -1362,7 +1362,7 @@ impl AppClient {
             let resp = exec_command_simple(
                 c.as_ref(),
                 &server_id,
-                &["/bin/sh", "-lc", &cmd],
+                &["/usr/bin/env", "sh", "-lc", &cmd],
                 Some(&project_root),
             )
             .await?;
@@ -1416,7 +1416,7 @@ impl AppClient {
                 // `dir /b /ad` in cwd — avoids path quoting issues
                 (vec!["cmd.exe", "/c", "dir", "/b", "/ad"], &normalized)
             } else {
-                (vec!["/bin/ls", "-1ap", &normalized], &normalized)
+                (vec!["/usr/bin/env", "ls", "-1ap", &normalized], &normalized)
             };
 
             let resp = exec_command_simple(c.as_ref(), &server_id, &command, Some(cwd)).await?;
@@ -1471,7 +1471,7 @@ impl AppClient {
                     &normalized,
                 ]
             } else {
-                vec!["/bin/mkdir", "-p", &normalized]
+                vec!["/usr/bin/env", "mkdir", "-p", &normalized]
             };
 
             let resp = exec_command_simple(c.as_ref(), &server_id, &command, None).await?;
@@ -1916,7 +1916,8 @@ fn image_read_command(path: &str) -> Vec<String> {
     }
 
     vec![
-        "/bin/sh".to_string(),
+        "/usr/bin/env".to_string(),
+        "sh".to_string(),
         "-lc".to_string(),
         r#"path="$1"; case "$path" in "~/"*) path="$HOME/${path#~/}" ;; esac; base64 < "$path""#
             .to_string(),
@@ -1957,7 +1958,12 @@ done"#;
     let response = exec_command_simple_owned(
         client,
         server_id,
-        vec!["/bin/sh".to_string(), "-lc".to_string(), script.to_string()],
+        vec![
+            "/usr/bin/env".to_string(),
+            "sh".to_string(),
+            "-lc".to_string(),
+            script.to_string(),
+        ],
         None,
     )
     .await?;
@@ -2071,7 +2077,8 @@ fn file_exists_command(path: &str) -> Vec<String> {
         ];
     }
     vec![
-        "/bin/sh".to_string(),
+        "/usr/bin/env".to_string(),
+        "sh".to_string(),
         "-lc".to_string(),
         r#"path="$1"; case "$path" in "~/"*) path="$HOME/${path#~/}" ;; esac; test -f "$path""#
             .to_string(),
@@ -3212,8 +3219,9 @@ mod tests {
     #[test]
     fn builds_posix_image_read_command_with_remote_tilde_expansion() {
         let command = image_read_command("~/image.png");
-        assert_eq!(command[0], "/bin/sh");
-        assert!(command[2].contains(r#"${path#~/}"#));
+        assert_eq!(command[0], "/usr/bin/env");
+        assert_eq!(command[1], "sh");
+        assert!(command[3].contains(r#"${path#~/}"#));
     }
 
     mod plugin_list {
