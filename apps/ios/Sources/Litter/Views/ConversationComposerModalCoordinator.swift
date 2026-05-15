@@ -106,8 +106,13 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
         appModel.snapshot?.threads.first(where: { $0.key == snapshot.threadKey })
     }
 
+    private var currentRuntimeSupportsPermissionOverrides: Bool {
+        currentThread?.agentRuntimeKind.supportsThreadPermissionOverrides ?? true
+    }
+
     private var hasAuthoritativeThreadPermissions: Bool {
-        guard let thread = currentThread else { return false }
+        guard let thread = currentThread,
+              thread.agentRuntimeKind.reportsEffectiveThreadPermissions else { return false }
         return threadPermissionsAreAuthoritative(
             approvalPolicy: thread.effectiveApprovalPolicy,
             sandboxPolicy: thread.effectiveSandboxPolicy
@@ -253,12 +258,12 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                                 Text("Thread permissions")
                                     .foregroundStyle(LitterTheme.textPrimary)
                                     .litterFont(.headline)
-                                Text("Changes apply on your next turn and later turns.")
+                                Text(currentRuntimeSupportsPermissionOverrides ? "Changes apply on your next turn and later turns." : "This runtime controls its own permissions.")
                                     .foregroundStyle(LitterTheme.textMuted)
                                     .litterFont(.caption)
                             }
                             Spacer(minLength: 12)
-                            Text(usesThreadDefaults ? "Using defaults" : "Custom override")
+                            Text(currentRuntimeSupportsPermissionOverrides ? (usesThreadDefaults ? "Using defaults" : "Custom override") : "Runtime managed")
                                 .foregroundStyle(usesThreadDefaults ? LitterTheme.textSecondary : LitterTheme.accentStrong)
                                 .litterFont(size: 11, weight: .semibold)
                                 .padding(.horizontal, 10)
@@ -294,52 +299,56 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                             .stroke(LitterTheme.border.opacity(0.55), lineWidth: 1)
                     )
 
-                    permissionSection(
-                        title: "Approval policy",
-                        subtitle: "Choose when Codex asks for approval"
-                    ) {
-                        permissionDropdown(
-                            title: selectedApprovalLabel,
-                            detail: selectedApprovalDescription
+                    if currentRuntimeSupportsPermissionOverrides {
+                        permissionSection(
+                            title: "Approval policy",
+                            subtitle: "Choose when Codex asks for approval"
                         ) {
-                            ForEach(ComposerApprovalOption.allCases) { option in
-                                permissionMenuItem(
-                                    title: option.title,
-                                    description: option.description,
-                                    isSelected: selectedApprovalValue == option.wireValue
-                                ) {
-                                    appState.setPermissions(
-                                        approvalPolicy: option.wireValue,
-                                        sandboxMode: selectedSandboxValue,
-                                        for: snapshot.threadKey
-                                    )
+                            permissionDropdown(
+                                title: selectedApprovalLabel,
+                                detail: selectedApprovalDescription
+                            ) {
+                                ForEach(ComposerApprovalOption.allCases) { option in
+                                    permissionMenuItem(
+                                        title: option.title,
+                                        description: option.description,
+                                        isSelected: selectedApprovalValue == option.wireValue
+                                    ) {
+                                        appState.setPermissions(
+                                            approvalPolicy: option.wireValue,
+                                            sandboxMode: selectedSandboxValue,
+                                            for: snapshot.threadKey
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    permissionSection(
-                        title: "Sandbox settings",
-                        subtitle: "Choose how much Codex can do when running commands"
-                    ) {
-                        permissionDropdown(
-                            title: selectedSandboxLabel,
-                            detail: selectedSandboxDescription
+                        permissionSection(
+                            title: "Sandbox settings",
+                            subtitle: "Choose how much Codex can do when running commands"
                         ) {
-                            ForEach(ComposerSandboxOption.allCases) { option in
-                                permissionMenuItem(
-                                    title: option.title,
-                                    description: option.description,
-                                    isSelected: selectedSandboxValue == option.wireValue
-                                ) {
-                                    appState.setPermissions(
-                                        approvalPolicy: selectedApprovalValue,
-                                        sandboxMode: option.wireValue,
-                                        for: snapshot.threadKey
-                                    )
+                            permissionDropdown(
+                                title: selectedSandboxLabel,
+                                detail: selectedSandboxDescription
+                            ) {
+                                ForEach(ComposerSandboxOption.allCases) { option in
+                                    permissionMenuItem(
+                                        title: option.title,
+                                        description: option.description,
+                                        isSelected: selectedSandboxValue == option.wireValue
+                                    ) {
+                                        appState.setPermissions(
+                                            approvalPolicy: selectedApprovalValue,
+                                            sandboxMode: option.wireValue,
+                                            for: snapshot.threadKey
+                                        )
+                                    }
                                 }
                             }
                         }
+                    } else {
+                        unsupportedPermissionRuntimeCard
                     }
                 }
                 .padding(16)
@@ -355,6 +364,31 @@ struct ConversationComposerModalCoordinator<Content: View>: View {
                 }
             }
         }
+    }
+
+    private var unsupportedPermissionRuntimeCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(LitterTheme.accentStrong)
+                Text("Runtime-managed permissions")
+                    .foregroundStyle(LitterTheme.textPrimary)
+                    .litterFont(.subheadline, weight: .semibold)
+            }
+            Text("This agent does not support Litter-side thread permission overrides, so approval and sandbox choices are not sent for this session.")
+                .foregroundStyle(LitterTheme.textMuted)
+                .litterFont(.caption)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(LitterTheme.surface.opacity(0.82))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(LitterTheme.border.opacity(0.55), lineWidth: 1)
+        )
     }
 
     private func permissionSummaryTile(

@@ -8,6 +8,21 @@ mod mobile_client_tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex as StdMutex};
 
+    #[test]
+    fn account_sync_warmup_only_runs_when_codex_runtime_is_present() {
+        assert!(runtime_kinds_support_account_sync(&["codex".to_string()]));
+        assert!(runtime_kinds_support_account_sync(&[
+            "pi".to_string(),
+            "codex".to_string(),
+        ]));
+        assert!(!runtime_kinds_support_account_sync(&["pi".to_string()]));
+        assert!(!runtime_kinds_support_account_sync(&[
+            "pi".to_string(),
+            "opencode".to_string(),
+        ]));
+        assert!(!runtime_kinds_support_account_sync(&[]));
+    }
+
     fn make_thread_info(id: &str) -> ThreadInfo {
         ThreadInfo {
             id: id.to_string(),

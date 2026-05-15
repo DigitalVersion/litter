@@ -37,7 +37,7 @@ Generalizes the remote app-server transport so it can drive any `AsyncRead + Asy
 
 Touches `app-server-client/src/remote.rs`.
 
-Consumed by `shared/rust-bridge/codex-mobile-client/src/ssh_remote_transport.rs`.
+Consumed by the SSH/Alleycat remote transport paths in `shared/rust-bridge/codex-mobile-client/src/alleycat.rs`, `src/session/connection.rs`, and `src/ssh_bridge.rs`. In particular, Pi/non-Codex reconnects use the patch's `RemoteAppServerClient::connect_json_line_stream`, while websocket-style reconnects use `connect_websocket_stream`.
 
 ## `absolute-path-cross-platform.patch`
 Lets `AbsolutePathBuf` deserialize Windows-style absolute paths on POSIX (and vice versa) without trying to canonicalize them through `path_absolutize::Absolutize` (which would mangle them by joining onto a POSIX cwd). Required because litter mobile clients consume thread metadata from servers running on either OS.

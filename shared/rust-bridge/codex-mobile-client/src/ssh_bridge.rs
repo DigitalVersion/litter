@@ -1,6 +1,10 @@
+use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use alleycat_bridge_core::{Bridge, ProcessLauncher, serve_stream};
@@ -9,16 +13,18 @@ use alleycat_claude_bridge::{ClaudeBridge, ClaudeSessionRef};
 use alleycat_opencode_bridge::{OpencodeBridge, OpencodeRuntime};
 use alleycat_pi_bridge::PiBridge;
 use alleycat_pi_bridge::index::{PiHydrator, PiSessionInfo};
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use codex_app_server_client::{AppServerClient, RemoteAppServerClient, RemoteAppServerConnectArgs};
 use serde::{Deserialize, Serialize};
-use tokio::io::duplex;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, duplex};
 use tracing::{debug, info, warn};
 
 use crate::session::connection::{
     RuntimeRemoteSessionResource, SshReconnectTransport, connect_remote_client,
     connect_remote_client_over_app_server_proxy,
 };
+use crate::session::remote_transport::{Reconnected, RemoteTransport};
 use crate::ssh::{
     PROFILE_INIT, RemoteShell, SshBootstrapTransport, SshClient, SshError, shell_quote,
 };
@@ -35,6 +41,107 @@ const REMOTE_PORT_PROBE_CANDIDATES: u16 = 50;
 /// Probe range for ephemeral remote ports (matches Linux's local port range).
 const REMOTE_PORT_PROBE_BASE: u16 = 17600;
 const REMOTE_PORT_PROBE_SPAN: u16 = 2000;
+
+#[derive(Clone)]
+struct StreamCloseHandle {
+    state: Arc<StreamCloseState>,
+}
+
+impl StreamCloseHandle {
+    fn close(&self) {
+        self.state.closed.store(true, Ordering::SeqCst);
+        if let Some(waker) = self
+            .state
+            .waker
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            waker.wake();
+        }
+    }
+}
+
+struct StreamCloseState {
+    closed: AtomicBool,
+    waker: StdMutex<Option<Waker>>,
+}
+
+struct ClosableStream<S> {
+    inner: S,
+    state: Arc<StreamCloseState>,
+}
+
+impl<S> ClosableStream<S> {
+    fn new(inner: S) -> (Self, StreamCloseHandle) {
+        let state = Arc::new(StreamCloseState {
+            closed: AtomicBool::new(false),
+            waker: StdMutex::new(None),
+        });
+        (
+            Self {
+                inner,
+                state: Arc::clone(&state),
+            },
+            StreamCloseHandle { state },
+        )
+    }
+
+    fn register_waker(&self, cx: &Context<'_>) {
+        *self
+            .state
+            .waker
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(cx.waker().clone());
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state.closed.load(Ordering::SeqCst)
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for ClosableStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.register_waker(cx);
+        if self.is_closed() {
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for ClosableStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.register_waker(cx);
+        if self.is_closed() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "SSH bridge stream closed",
+            )));
+        }
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.is_closed() {
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.state.closed.store(true, Ordering::SeqCst);
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 pub enum SshBridgeTransport {
@@ -193,21 +300,33 @@ pub async fn connect_runtime_resources_via_ssh(
         let (client, trait_transport) = if kind == "codex" {
             let (client, reconnect_transport) =
                 connect_codex_via_ssh(Arc::clone(&ssh), prefer_ipv6).await?;
-            let t: std::sync::Arc<dyn crate::session::remote_transport::RemoteTransport> =
-                std::sync::Arc::new(reconnect_transport);
+            let t: Arc<dyn RemoteTransport> = Arc::new(reconnect_transport);
             (client, Some(t))
         } else {
-            (
-                connect_app_server_client_via_ssh(
-                    Arc::clone(&ssh),
-                    state_root.join(runtime_label(&kind)),
-                    kind.clone(),
-                    None,
-                    transport,
-                )
-                .await?,
+            let state_dir = state_root.join(runtime_label(&kind));
+            let current_close = Arc::new(StdMutex::new(None));
+            let (client, close_handle) = connect_app_server_client_via_ssh_with_close(
+                Arc::clone(&ssh),
+                &state_dir,
+                kind.clone(),
                 None,
+                transport,
             )
+            .await?;
+            if let Some(close_handle) = close_handle {
+                *current_close
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(close_handle);
+            }
+            let reconnect_transport = SshBridgeReconnectTransport {
+                ssh: Arc::clone(&ssh),
+                state_dir,
+                kind: kind.clone(),
+                transport,
+                current_close,
+            };
+            let t: Arc<dyn RemoteTransport> = Arc::new(reconnect_transport);
+            (client, Some(t))
         };
         info!("ssh bridge runtime connect ready kind={kind:?}");
         let name = runtime_label(&kind).to_string();
@@ -235,6 +354,64 @@ pub async fn connect_runtime_resources_via_ssh(
     Ok((resources, infos))
 }
 
+#[derive(Clone)]
+struct SshBridgeReconnectTransport {
+    ssh: Arc<SshClient>,
+    state_dir: PathBuf,
+    kind: AgentRuntimeKind,
+    transport: SshBridgeTransport,
+    current_close: Arc<StdMutex<Option<StreamCloseHandle>>>,
+}
+
+#[async_trait]
+impl RemoteTransport for SshBridgeReconnectTransport {
+    async fn reconnect(
+        &self,
+        _args: &RemoteAppServerConnectArgs,
+        _websocket_url: &str,
+    ) -> Result<Reconnected, crate::transport::TransportError> {
+        info!(
+            kind = ?self.kind,
+            state_dir = %self.state_dir.display(),
+            transport = ?self.transport,
+            "ssh bridge runtime reconnect start"
+        );
+        let (client, close_handle) = connect_app_server_client_via_ssh_with_close(
+            Arc::clone(&self.ssh),
+            &self.state_dir,
+            self.kind.clone(),
+            None,
+            self.transport,
+        )
+        .await
+        .map_err(|error| crate::transport::TransportError::ConnectionFailed(error.to_string()))?;
+        if let Some(close_handle) = close_handle {
+            *self
+                .current_close
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(close_handle);
+        }
+        info!(kind = ?self.kind, "ssh bridge runtime reconnect ready");
+        Ok(Reconnected {
+            client,
+            keepalive: None,
+        })
+    }
+
+    async fn close_current_connection(&self) {
+        let Some(close_handle) = self
+            .current_close
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        else {
+            return;
+        };
+        info!(kind = ?self.kind, "ssh bridge runtime close current stream");
+        close_handle.close();
+    }
+}
+
 pub async fn connect_app_server_client_via_ssh(
     ssh: Arc<SshClient>,
     state_dir: impl AsRef<Path>,
@@ -242,6 +419,18 @@ pub async fn connect_app_server_client_via_ssh(
     bin_override: Option<String>,
     transport: SshBridgeTransport,
 ) -> Result<AppServerClient, SshBridgeError> {
+    connect_app_server_client_via_ssh_with_close(ssh, state_dir, kind, bin_override, transport)
+        .await
+        .map(|(client, _close_handle)| client)
+}
+
+async fn connect_app_server_client_via_ssh_with_close(
+    ssh: Arc<SshClient>,
+    state_dir: impl AsRef<Path>,
+    kind: AgentRuntimeKind,
+    bin_override: Option<String>,
+    transport: SshBridgeTransport,
+) -> Result<(AppServerClient, Option<StreamCloseHandle>), SshBridgeError> {
     let shell = ssh.detect_remote_shell().await;
     if shell == RemoteShell::PowerShell {
         return Err(SshBridgeError::WindowsRemoteNotYetSupported);
@@ -308,7 +497,9 @@ pub async fn connect_app_server_client_via_ssh(
                 .map_err(|error| SshBridgeError::BridgeStartupFailed(error.to_string()))?
         }
         "opencode" => {
-            return connect_opencode_via_ssh(ssh, state_dir, bin_override).await;
+            return connect_opencode_via_ssh(ssh, state_dir, bin_override)
+                .await
+                .map(|client| (client, None));
         }
         "codex" => return Err(SshBridgeError::UseExistingCodexPath),
         // Every other agent (amp/droid/hermes/anything new from
@@ -326,8 +517,9 @@ pub async fn connect_app_server_client_via_ssh(
 async fn connect_bridge_stream(
     bridge: Arc<dyn Bridge>,
     kind: AgentRuntimeKind,
-) -> Result<AppServerClient, SshBridgeError> {
+) -> Result<(AppServerClient, Option<StreamCloseHandle>), SshBridgeError> {
     let (client_io, server_io) = duplex(64 * 1024);
+    let (client_io, close_handle) = ClosableStream::new(client_io);
     let spawn_kind = kind.clone();
     tokio::spawn(async move {
         if let Err(error) = serve_stream(bridge, server_io).await {
@@ -349,7 +541,7 @@ async fn connect_bridge_stream(
         .await
         .map_err(|error| SshBridgeError::HandshakeFailed(error.to_string()))?;
     info!("ssh bridge stream connect ready kind={kind:?}");
-    Ok(AppServerClient::Remote(remote))
+    Ok((AppServerClient::Remote(remote), Some(close_handle)))
 }
 
 async fn connect_codex_via_ssh(
@@ -444,7 +636,9 @@ async fn connect_opencode_via_ssh(
         .build()
         .await
         .map_err(|error| SshBridgeError::BridgeStartupFailed(error.to_string()))?;
-    connect_bridge_stream(bridge, "opencode".to_string()).await
+    connect_bridge_stream(bridge, "opencode".to_string())
+        .await
+        .map(|(client, _close_handle)| client)
 }
 
 fn cli_candidates(defaults: &[&str], bin_override: Option<&str>) -> Vec<String> {
