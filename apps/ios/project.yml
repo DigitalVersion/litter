@@ -84,6 +84,7 @@ targets:
       - path: Sources/LitterWatch/Models/WatchSize.swift
       - path: Sources/LitterWatch/Models/WatchHapticDetector.swift
       - path: Sources/LitterWatch/Models/WatchSnapshotStore.swift
+      - path: Sources/LitterWatch/Models/WatchDeepLinkRouter.swift
       - path: Sources/LitterWatchComplications/LitterServerListPayload.swift
       - path: Sources/LitterWatchComplications/LitterComplicationEntry.swift
       - path: Sources/LitterWatchComplications/LitterRunningTurnPayload.swift

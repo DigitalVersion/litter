@@ -202,6 +202,7 @@ struct LitterWatchApp: App {
 /// page tab view and broke back navigation.
 struct WatchRootView: View {
     @EnvironmentObject var store: WatchAppStore
+    @ObservedObject private var router = WatchDeepLinkRouter.shared
     @State private var tab: RootTab = .home
     @State private var path: [WatchTask] = []
 
@@ -218,25 +219,49 @@ struct WatchRootView: View {
             }
         }
         .onOpenURL { url in
-            route(url)
+            router.handle(url)
+        }
+        .onChange(of: router.pendingDeepLink) { _, destination in
+            if let destination { apply(destination) }
+        }
+        .onAppear {
+            if let destination = router.pendingDeepLink {
+                apply(destination)
+            }
         }
     }
 
-    /// Parse `litter-watch://task/{taskId}` and push `TaskDetailScreen` for
-    /// the matched task. Falls back to home when the task isn't in the
-    /// store (e.g., complication tapped before first snapshot arrived).
-    private func route(_ url: URL) {
-        guard url.scheme == "litter-watch", url.host == "task" else { return }
-        let taskId = url.pathComponents.dropFirst().first ?? ""
-        guard !taskId.isEmpty,
-              let task = store.tasks.first(where: { $0.id == taskId })
-        else {
-            path.removeAll()
+    /// Apply a parsed deep-link destination. Routed via
+    /// `WatchDeepLinkRouter` so both `.onOpenURL` and AppIntent-triggered
+    /// launches use the same single source of truth.
+    private func apply(_ destination: WatchDeepLinkRouter.Destination) {
+        switch destination {
+        case .task(let id):
+            guard let task = store.tasks.first(where: { $0.id == id }) else {
+                path.removeAll()
+                tab = .home
+                router.clear()
+                return
+            }
             tab = .home
-            return
+            path = [task]
+        case .server(let id):
+            // Drill into the most-recent task on that server when we have
+            // one; otherwise just land on home (the user will see the
+            // server's rows in the snapshot).
+            if let task = store.tasks.first(where: { $0.serverId == id }) {
+                tab = .home
+                path = [task]
+                store.focus(on: task)
+            } else {
+                path.removeAll()
+                tab = .home
+            }
+        case .voice:
+            path.removeAll()
+            tab = .voice
         }
-        tab = .home
-        path = [task]
+        router.clear()
     }
 }
 
