@@ -44,7 +44,7 @@ fi
 ZIG_CACHE_DIR="${GHOSTTY_ZIG_CACHE_DIR:-$STAGING_DIR/zig-cache}"
 MACOS_SDK_SHIM_DIR="$ZIG_CACHE_DIR/macos-sdk-shim/MacOSX.sdk"
 
-mkdir -p "$GENERATED_DIR/Headers" "$GENERATED_DIR/ios-device" "$GENERATED_DIR/ios-sim" "$STAGING_DIR/bin"
+mkdir -p "$GENERATED_DIR/Headers" "$GENERATED_DIR/ios-device" "$GENERATED_DIR/ios-sim" "$GENERATED_DIR/ios-macabi" "$STAGING_DIR/bin"
 rm -rf "$ZIG_CACHE_DIR"
 mkdir -p "$ZIG_CACHE_DIR/global" "$ZIG_CACHE_DIR/local"
 
@@ -111,6 +111,14 @@ prepare_macos_sdk_for_zig() {
         esac
     done
 
+    # The host linker still needs the SDK framework tree for macabi and other
+    # Darwin-host helper builds, so make the top-level SDK entries explicit.
+    for entry in Entitlements.plist SDKSettings.json SDKSettings.plist System; do
+        if [ -e "$source_sdk/$entry" ] && [ ! -e "$MACOS_SDK_SHIM_DIR/$entry" ]; then
+            ln -s "$source_sdk/$entry" "$MACOS_SDK_SHIM_DIR/$entry"
+        fi
+    done
+
     find "$source_sdk/usr" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do
         dest="$MACOS_SDK_SHIM_DIR/usr/$(basename "$entry")"
         case "$(basename "$entry")" in
@@ -172,7 +180,7 @@ build_slice() {
     rm -rf "$prefix"
     mkdir -p "$prefix"
 
-    echo "==> Building Ghostty iOS $name static library..."
+    echo "==> Building Ghostty $name static library..."
     (
         cd "$GHOSTTY_DIR"
         zig_args=(zig build \
@@ -217,6 +225,7 @@ build_slice() {
 echo "==> Building Ghostty iOS static libraries from $(git -C "$GHOSTTY_DIR" rev-parse --short HEAD)..."
 build_slice "ios-device" "aarch64-ios.18.0" "" "$GENERATED_DIR/ios-device/libghostty.a"
 build_slice "ios-sim" "aarch64-ios.18.0-simulator" "apple_a17" "$GENERATED_DIR/ios-sim/libghostty.a"
+build_slice "ios-macabi-arm64" "aarch64-ios.18.0-macabi" "apple_m1" "$GENERATED_DIR/ios-macabi/libghostty.a"
 
 cp "$GHOSTTY_DIR/include/ghostty.h" "$GENERATED_DIR/Headers/ghostty.h"
 
@@ -224,3 +233,4 @@ echo "==> Ghostty iOS artifacts installed:"
 echo "    $GENERATED_DIR/Headers/ghostty.h"
 echo "    $GENERATED_DIR/ios-device/libghostty.a"
 echo "    $GENERATED_DIR/ios-sim/libghostty.a"
+echo "    $GENERATED_DIR/ios-macabi/libghostty.a"

@@ -237,7 +237,7 @@ targets:
           APP_CODE_SIGN_STYLE: Automatic
           PROVISIONING_PROFILE_SPECIFIER: "$(APP_PROVISIONING_PROFILE_SPECIFIER)"
           APP_PROVISIONING_PROFILE_SPECIFIER: ""
-          OTHER_LDFLAGS: "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client"
+          OTHER_LDFLAGS: "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client -lghostty"
         Release:
           CODE_SIGN_STYLE: "$(APP_CODE_SIGN_STYLE)"
           APP_CODE_SIGN_STYLE: Automatic
@@ -245,6 +245,7 @@ targets:
           APP_CODE_SIGN_IDENTITY: ""
           PROVISIONING_PROFILE_SPECIFIER: "$(APP_PROVISIONING_PROFILE_SPECIFIER)"
           APP_PROVISIONING_PROFILE_SPECIFIER: ""
+          OTHER_LDFLAGS: "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client -lghostty"
         # Direct-distribution (notarized .dmg) lane. Re-points
         # CODE_SIGN_ENTITLEMENTS at the unsandboxed entitlements file so the
         # Mac build can spawn a local `codex app-server`. Same automatic
@@ -257,6 +258,7 @@ targets:
           APP_CODE_SIGN_IDENTITY: ""
           PROVISIONING_PROFILE_SPECIFIER: "$(APP_PROVISIONING_PROFILE_SPECIFIER)"
           APP_PROVISIONING_PROFILE_SPECIFIER: ""
+          OTHER_LDFLAGS: "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client -lghostty"
           ENABLE_HARDENED_RUNTIME: YES
           CODE_SIGN_ENTITLEMENTS: Sources/Litter/Litter-Catalyst-DeveloperID.entitlements
   LitterLiveActivity:

@@ -2945,6 +2945,7 @@
 				);
 				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) $(PROJECT_DIR)/GeneratedRust/ios-macabi";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client -lghostty";
 				PRODUCT_BUNDLE_IDENTIFIER = com.sigkitten.litter;
 				PRODUCT_NAME = Litter;
 				PROVISIONING_PROFILE_SPECIFIER = "$(APP_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3245,7 +3246,7 @@
 				);
 				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) $(PROJECT_DIR)/GeneratedRust/ios-macabi";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				OTHER_LDFLAGS = "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client -lghostty";
 				PRODUCT_BUNDLE_IDENTIFIER = com.sigkitten.litter;
 				PRODUCT_NAME = Litter;
 				PROVISIONING_PROFILE_SPECIFIER = "$(APP_PROVISIONING_PROFILE_SPECIFIER)";
@@ -3328,6 +3329,7 @@
 				);
 				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) $(PROJECT_DIR)/GeneratedRust/ios-macabi";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = "$(inherited) -lc++ -lz -lresolv -lcodex_mobile_client -lghostty";
 				PRODUCT_BUNDLE_IDENTIFIER = com.sigkitten.litter;
 				PRODUCT_NAME = Litter;
 				PROVISIONING_PROFILE_SPECIFIER = "$(APP_PROVISIONING_PROFILE_SPECIFIER)";

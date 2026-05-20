@@ -147,9 +147,21 @@ fi
 # compiled (codex-mobile-client links against them). Build them on demand
 # when missing so this script is self-sufficient for CI workflows that
 # invoke it directly (without going through the Makefile's stamp dep).
-LIBGHOSTTY_DEVICE_LIB="$REPO_DIR/apps/ios/GeneratedRust/ghostty-build/ios-device/libghostty.a"
-LIBGHOSTTY_SIM_LIB="$REPO_DIR/apps/ios/GeneratedRust/ghostty-build/ios-sim/libghostty.a"
-if [ ! -f "$LIBGHOSTTY_DEVICE_LIB" ] || [ ! -f "$LIBGHOSTTY_SIM_LIB" ]; then
+LIBGHOSTTY_DEVICE_LIB="$GENERATED_DEVICE_DIR/libghostty.a"
+LIBGHOSTTY_SIM_LIB="$GENERATED_SIM_DIR/libghostty.a"
+LIBGHOSTTY_MACABI_LIB="$GENERATED_MACABI_DIR/libghostty.a"
+NEEDS_GHOSTTY=0
+if [ "$DEVICE_ONLY" -eq 1 ] && [ ! -f "$LIBGHOSTTY_DEVICE_LIB" ]; then
+  NEEDS_GHOSTTY=1
+elif [ "$SIM_ONLY" -eq 1 ] && [ ! -f "$LIBGHOSTTY_SIM_LIB" ]; then
+  NEEDS_GHOSTTY=1
+elif [ "$MACABI_ONLY" -eq 1 ] && [ ! -f "$LIBGHOSTTY_MACABI_LIB" ]; then
+  NEEDS_GHOSTTY=1
+elif [ "$DEVICE_ONLY" -eq 0 ] && [ "$SIM_ONLY" -eq 0 ] && [ "$MACABI_ONLY" -eq 0 ] &&
+  { [ ! -f "$LIBGHOSTTY_DEVICE_LIB" ] || [ ! -f "$LIBGHOSTTY_SIM_LIB" ] || [ ! -f "$LIBGHOSTTY_MACABI_LIB" ]; }; then
+  NEEDS_GHOSTTY=1
+fi
+if [ "$NEEDS_GHOSTTY" -eq 1 ]; then
   echo "==> libghostty artifacts missing; building (use 'make ghostty-ios' to invoke with stamp caching)"
   "$REPO_DIR/apps/ios/scripts/build-ghostty.sh"
 fi
