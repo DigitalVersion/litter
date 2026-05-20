@@ -188,6 +188,7 @@
 		46C5F0B53F9EF54FE8F311A4 /* ChatGPTOAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33402D8F29D5CAA2DD07ED9F /* ChatGPTOAuthTests.swift */; };
 		47248B9E35D3302200F65C05 /* UserMountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1E2519849D8BEDC1496591 /* UserMountStore.swift */; };
 		479BECE08ABF9348B42A3468 /* SilentAudioKeeper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EB9C4946A911272FC0DC850 /* SilentAudioKeeper.swift */; };
+		4809B5C36CEDFE9BF77E06EB /* WatchApprovalNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06FAE2DA1D08C45531747A2 /* WatchApprovalNotification.swift */; };
 		483C48A38E7D5B48F9735CB6 /* CarPlayVoiceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E75F2343E53BABCD1C8207E /* CarPlayVoiceManager.swift */; };
 		48EDBB2A1FFD97003248727D /* OrientationResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1022F3BB191F207126130232 /* OrientationResponder.swift */; };
 		49026CE0B09FF41A24966343 /* WatchSessionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B851BADF65A707A42EC7F94F /* WatchSessionBridge.swift */; };
@@ -313,6 +314,7 @@
 		746139312C6BC04FE029B672 /* DiffRendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0453F9A958E06582AE93013 /* DiffRendering.swift */; };
 		75B00C86229BEC4A5DC22865 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F4623B9F597577A667A125D9 /* QuartzCore.framework */; };
 		76001245CD9D34B623D12EFC /* gruvbox-dark-medium.json in Resources */ = {isa = PBXBuildFile; fileRef = 5B2CEDF857883B2E36157356 /* gruvbox-dark-medium.json */; };
+		76645953E72A3A78F0A4EC61 /* WatchApprovalNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06FAE2DA1D08C45531747A2 /* WatchApprovalNotification.swift */; };
 		76BE50FE6BD45F34126B1EE6 /* AppRpcParams.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1251509F0DDD4F5D494C9956 /* AppRpcParams.swift */; };
 		76D59A3607F33A97008334CA /* material-theme-lighter.json in Resources */ = {isa = PBXBuildFile; fileRef = 76B9969D2D4C7AA23FC9DB93 /* material-theme-lighter.json */; };
 		7731537E9BC8B234CDFE6424 /* SwiftSshCredentialProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782D870FCEA68BB3752F965F /* SwiftSshCredentialProvider.swift */; };
@@ -1014,6 +1016,7 @@
 		AEFDEDEF73BC5E33C2F2E3B1 /* AppSpecificTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSpecificTypes.swift; sourceTree = "<group>"; };
 		AF409B64E0082FC6B68379EA /* dracula-soft.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "dracula-soft.json"; sourceTree = "<group>"; };
 		B0648D501D363553E86BAE63 /* BerkeleyMono-Regular.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BerkeleyMono-Regular.otf"; sourceTree = "<group>"; };
+		B06FAE2DA1D08C45531747A2 /* WatchApprovalNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchApprovalNotification.swift; sourceTree = "<group>"; };
 		B0C1A0569B4424123A37B0DA /* ConversationPlanSemanticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationPlanSemanticsTests.swift; sourceTree = "<group>"; };
 		B17C306BA7D9DCF6ACF24169 /* WatchAppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppStore.swift; sourceTree = "<group>"; };
 		B22B0C284B20FB135A3A35BE /* MinigameOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinigameOverlayView.swift; sourceTree = "<group>"; };
@@ -1610,6 +1613,7 @@
 				6AE2C5F6A9589EF98EF22485 /* VoiceSessionModels.swift */,
 				A57573910BEE96B3224934D2 /* VoiceTranscriptionManager.swift */,
 				0CB4A268C8D43CA2144617DE /* WallpaperManager.swift */,
+				B06FAE2DA1D08C45531747A2 /* WatchApprovalNotification.swift */,
 				283C843BD2011350B42F6807 /* WatchCompanionBridge.swift */,
 				D88DE6E95BD289268352F0B9 /* WatchProjection.swift */,
 			);
@@ -2476,6 +2480,7 @@
 				D77023E14624950626E00AFE /* WallpaperAdjustView.swift in Sources */,
 				FCAE1D50167F5F4DB4287DEF /* WallpaperManager.swift in Sources */,
 				5D14555D5DD1647831E08F51 /* WallpaperSelectionView.swift in Sources */,
+				4809B5C36CEDFE9BF77E06EB /* WatchApprovalNotification.swift in Sources */,
 				D4130690BA5E4DBAF8FA03A5 /* WatchCompanionBridge.swift in Sources */,
 				97C14B0FC047354B0B4B03B1 /* WatchDeepLinkRouter.swift in Sources */,
 				AE8951752569EA6BF8D35E9C /* WatchHapticDetector.swift in Sources */,
@@ -2659,6 +2664,7 @@
 				EE3BF9B54DC05D0C46470B1B /* WallpaperAdjustView.swift in Sources */,
 				8EC08D1416B9EC288AC17079 /* WallpaperManager.swift in Sources */,
 				84B574C27F1A045B613252E7 /* WallpaperSelectionView.swift in Sources */,
+				76645953E72A3A78F0A4EC61 /* WatchApprovalNotification.swift in Sources */,
 				D230118353DCF0324E51CF5B /* WidgetWebView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

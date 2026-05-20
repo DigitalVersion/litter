@@ -5,17 +5,6 @@ import WatchConnectivity
 import WidgetKit
 #endif
 
-/// Identifiers shared between the iPhone scheduler and the watch action
-/// handler so the two stay in lockstep.
-enum WatchApprovalNotification {
-    static let categoryIdentifier = "litter.approval"
-    static let allowActionIdentifier = "litter.approval.allow"
-    static let denyActionIdentifier = "litter.approval.deny"
-    static let requestIdKey = "requestId"
-    static let serverIdKey = "serverId"
-    static let threadIdKey = "threadId"
-}
-
 /// Thin transport seam over `WCSession` so unit tests can drive
 /// `WatchCompanionBridge` without a real WatchConnectivity stack. Production
 /// uses the default `WCSession.default` conformance below.
