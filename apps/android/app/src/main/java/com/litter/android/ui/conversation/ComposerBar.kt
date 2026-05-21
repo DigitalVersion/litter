@@ -528,6 +528,8 @@ fun ComposerBar(
                             val next = when (current.status) {
                                 AppThreadGoalStatus.ACTIVE -> AppThreadGoalStatus.PAUSED
                                 AppThreadGoalStatus.PAUSED,
+                                AppThreadGoalStatus.BLOCKED,
+                                AppThreadGoalStatus.USAGE_LIMITED,
                                 AppThreadGoalStatus.BUDGET_LIMITED -> AppThreadGoalStatus.ACTIVE
                                 AppThreadGoalStatus.COMPLETE -> return@launch
                             }
@@ -1697,6 +1699,8 @@ private fun goalStatusLabel(status: AppThreadGoalStatus): String =
     when (status) {
         AppThreadGoalStatus.ACTIVE -> "active"
         AppThreadGoalStatus.PAUSED -> "paused"
+        AppThreadGoalStatus.BLOCKED -> "blocked"
+        AppThreadGoalStatus.USAGE_LIMITED -> "limited by usage"
         AppThreadGoalStatus.BUDGET_LIMITED -> "limited by budget"
         AppThreadGoalStatus.COMPLETE -> "complete"
     }
@@ -1724,12 +1728,16 @@ private fun GoalPanel(goal: AppThreadGoal, actions: GoalCardActions) {
     val tint = when (goal.status) {
         AppThreadGoalStatus.ACTIVE -> LitterTheme.accent
         AppThreadGoalStatus.PAUSED -> LitterTheme.textMuted
+        AppThreadGoalStatus.BLOCKED,
+        AppThreadGoalStatus.USAGE_LIMITED,
         AppThreadGoalStatus.BUDGET_LIMITED -> LitterTheme.warning
         AppThreadGoalStatus.COMPLETE -> LitterTheme.success
     }
     val statusLabel = when (goal.status) {
         AppThreadGoalStatus.ACTIVE -> "active"
         AppThreadGoalStatus.PAUSED -> "paused"
+        AppThreadGoalStatus.BLOCKED -> "blocked"
+        AppThreadGoalStatus.USAGE_LIMITED -> "usage limit"
         AppThreadGoalStatus.BUDGET_LIMITED -> "limited"
         AppThreadGoalStatus.COMPLETE -> "complete"
     }
@@ -1755,6 +1763,8 @@ private fun GoalPanel(goal: AppThreadGoal, actions: GoalCardActions) {
     val pauseResumeLabel: String? = when (goal.status) {
         AppThreadGoalStatus.ACTIVE -> "Pause goal"
         AppThreadGoalStatus.PAUSED -> "Resume goal"
+        AppThreadGoalStatus.BLOCKED -> "Resume goal (override block)"
+        AppThreadGoalStatus.USAGE_LIMITED -> "Resume goal (override usage cap)"
         AppThreadGoalStatus.BUDGET_LIMITED -> "Resume goal (override cap)"
         AppThreadGoalStatus.COMPLETE -> null
     }

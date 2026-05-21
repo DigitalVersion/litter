@@ -1196,6 +1196,8 @@ struct SessionCanvasLine: View {
         switch status {
         case .active: return "· ACTIVE"
         case .paused: return "· PAUSED"
+        case .blocked: return "· BLOCKED"
+        case .usageLimited: return "· USAGE"
         case .budgetLimited: return "· BUDGET"
         case .complete: return "· COMPLETE"
         }
@@ -1307,7 +1309,7 @@ struct SessionCanvasLine: View {
         switch status {
         case .active: return LitterTheme.accent
         case .paused: return LitterTheme.textMuted
-        case .budgetLimited: return LitterTheme.warning
+        case .blocked, .usageLimited, .budgetLimited: return LitterTheme.warning
         case .complete: return LitterTheme.success
         }
     }

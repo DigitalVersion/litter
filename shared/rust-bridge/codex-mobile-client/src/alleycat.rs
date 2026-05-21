@@ -6,7 +6,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use codex_app_server_client::{AppServerClient, RemoteAppServerClient, RemoteAppServerConnectArgs};
+use codex_app_server_client::{
+    AppServerClient, RemoteAppServerClient, RemoteAppServerConnectArgs, RemoteAppServerEndpoint,
+};
 use iroh::endpoint::{Connection, QuicTransportConfig, RecvStream, SendStream, VarInt};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -543,8 +545,10 @@ pub async fn connect_app_server_client(
     log_session_info(&params, &agent, response.session.as_ref(), resume_from);
     let label = format!("alleycat://{}/{}", params.node_id, agent);
     let args = RemoteAppServerConnectArgs {
-        websocket_url: format!("ws://alleycat/{agent}"),
-        auth_token: None,
+        endpoint: RemoteAppServerEndpoint::WebSocket {
+            websocket_url: format!("ws://alleycat/{agent}"),
+            auth_token: None,
+        },
         client_name: "Litter".to_string(),
         client_version: "1.0".to_string(),
         experimental_api: true,
@@ -558,9 +562,11 @@ pub async fn connect_app_server_client(
                 .await
                 .map_err(|error| AlleycatError::Transport(error.to_string()))?
         }
-        AgentWire::Jsonl => RemoteAppServerClient::connect_json_line_stream(stream, args, label)
-            .await
-            .map_err(|error| AlleycatError::Transport(error.to_string()))?,
+        AgentWire::Jsonl => {
+            codex_slingshot::json_line_wire::connect_json_line_stream(stream, args, label)
+                .await
+                .map_err(|error| AlleycatError::Transport(error.to_string()))?
+        }
     };
     let session = Arc::new(AlleycatSession {
         connection,

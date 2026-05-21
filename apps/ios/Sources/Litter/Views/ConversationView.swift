@@ -2203,6 +2203,8 @@ private struct ConversationInputBar: View {
         switch status {
         case .active: return "active"
         case .paused: return "paused"
+        case .blocked: return "blocked"
+        case .usageLimited: return "limited by usage"
         case .budgetLimited: return "limited by budget"
         case .complete: return "complete"
         }
@@ -2215,7 +2217,7 @@ private struct ConversationInputBar: View {
                 let next: AppThreadGoalStatus
                 switch current {
                 case .active: next = .paused
-                case .paused, .budgetLimited: next = .active
+                case .paused, .blocked, .usageLimited, .budgetLimited: next = .active
                 case .complete: return
                 }
                 Task { await applyGoalUpdate(status: next) }

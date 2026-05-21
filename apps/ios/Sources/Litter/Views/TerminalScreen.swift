@@ -26,32 +26,35 @@ struct TerminalScreen: View {
     @Environment(\.scenePhase) private var scenePhase
 
     private let accent = Color(red: 0, green: 1, blue: 0.612)
+    private let alleycatServerIdPrefix = "alleycat:"
 
     var body: some View {
-        VStack(spacing: 0) {
-            backendBar
+        ZStack(alignment: .top) {
             terminalSurface
+            backendBar
         }
         .background(Color.black.ignoresSafeArea())
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .navigationTitle("Terminal")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(Color.black, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .task {
+            attachOutputSink()
             guard !didStart else { return }
             didStart = true
-            controller.setOutputSink { data in
-                Task { @MainActor in
-                    ghosttyRenderer.write(data)
-                }
-            }
-            let options = loadBackendOptions(cwd: cwd)
-            backendOptions = options
+            let options = refreshBackendOptions()
             let initial = initialBackend(from: options, cwd: cwd)
             selectedBackendID = initial.id
             await controller.open(backend: initial.backend)
             applyConfigSettings()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .litterSavedServersDidChange)) { _ in
+            reconcileBackendOptions()
+        }
+        .onChange(of: appSnapshotRevision) { _, _ in
+            reconcileBackendOptions()
         }
         .onDisappear {
             // End any active first-responder hold so the keyboard tears
@@ -86,6 +89,19 @@ struct TerminalScreen: View {
         backendOptions.first { $0.id == selectedBackendID } ?? backendOptions.first
     }
 
+    private var appSnapshotRevision: UInt64 {
+        AppModel.shared.snapshotRevision
+    }
+
+    private func attachOutputSink() {
+        let renderer = ghosttyRenderer
+        controller.setOutputSink { data in
+            Task { @MainActor in
+                renderer.write(data)
+            }
+        }
+    }
+
     private var backendBar: some View {
         HStack(spacing: 10) {
             Menu {
@@ -95,6 +111,11 @@ struct TerminalScreen: View {
                     } label: {
                         Label(option.title, systemImage: option.systemImage)
                     }
+                }
+                if backendOptions.count <= 1 {
+                    Divider()
+                    Button("No remote terminal servers") {}
+                        .disabled(true)
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -111,7 +132,6 @@ struct TerminalScreen: View {
                 .background(Color.white.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            .disabled(backendOptions.count <= 1)
 
             Text(selectedBackend?.subtitle ?? "On device")
                 .font(.custom("SFMono-Regular", size: 11))
@@ -190,12 +210,17 @@ struct TerminalScreen: View {
                     },
                     fontSize: storedFontSize
                 )
+                .frame(
+                    width: geometry.size.width,
+                    height: geometry.size.height,
+                    alignment: .topLeading
+                )
                 .background(Color.black)
 
                 if shouldShowStatusOverlay {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(displayText)
-                            .font(.custom("SFMono-Regular", size: 13))
+                            .font(.custom("SFMono-Regular", size: storedFontSize))
                             .foregroundColor(phaseColor)
                             .textSelection(.enabled)
                         if let challenge = controller.sshTrustChallenge {
@@ -217,16 +242,24 @@ struct TerminalScreen: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
+                    .padding(.top, TerminalChrome.backendBarHeight)
                 }
             }
+            .frame(
+                width: geometry.size.width,
+                height: geometry.size.height,
+                alignment: .topLeading
+            )
             .background(Color.black)
             .onAppear {
+                applyConfigSettings()
                 resizeTerminal(for: geometry.size)
             }
             .onChange(of: geometry.size) { _, size in
                 resizeTerminal(for: size)
             }
             .onChange(of: storedFontSize) { _, _ in
+                applyConfigSettings()
                 // Font size change re-grids the PTY but the SwiftUI size
                 // didn't move — re-evaluate against the same geometry on
                 // the next frame so the new cell metrics propagate.
@@ -235,6 +268,7 @@ struct TerminalScreen: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var displayText: String {
@@ -325,6 +359,7 @@ struct TerminalScreen: View {
     private func selectBackend(_ option: TerminalBackendOption) {
         guard selectedBackendID != option.id else { return }
         selectedBackendID = option.id
+        attachOutputSink()
         ghosttyRenderer.clearScreen()
         nativeRendererHasOutput = false
         Task {
@@ -351,6 +386,7 @@ struct TerminalScreen: View {
         } else {
             grid = TerminalGridSize(estimatedFor: size, fontSize: storedFontSize)
         }
+        ghosttyRenderer.setGridSize(cols: grid.cols, rows: grid.rows)
         guard grid != terminalGridSize else { return }
         terminalGridSize = grid
         let notifyBackend = selectedBackend?.supportsResize == true
@@ -363,7 +399,35 @@ struct TerminalScreen: View {
         var options = [TerminalBackendOption.localIsh(cwd: cwd)]
         var seenNodeIds = Set<String>()
         var seenSshKeys = Set<String>()
-        for saved in SavedServerStore.rememberedServers() {
+        let savedServers = SavedServerStore.load()
+        let savedByNodeId = savedServers.reduce(into: [String: SavedServer]()) { result, saved in
+            guard let nodeId = normalized(saved.alleycatNodeId),
+                  result[nodeId] == nil else {
+                return
+            }
+            result[nodeId] = saved
+        }
+        for server in AppModel.shared.snapshot?.servers ?? [] {
+            guard let nodeId = alleycatNodeId(fromServerId: server.serverId),
+                  seenNodeIds.insert(nodeId).inserted,
+                  let token = try? AlleycatCredentialStore.shared.loadToken(nodeId: nodeId),
+                  !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            let saved = savedByNodeId[nodeId]
+            options.append(
+                TerminalBackendOption.remoteAlleycat(
+                    name: normalized(saved?.name) ?? server.displayName,
+                    nodeId: nodeId,
+                    token: token,
+                    relay: normalized(saved?.alleycatRelay)
+                )
+            )
+        }
+        // Include non-remembered discovered records too: if they have a
+        // terminal-capable credential, the chooser should be able to switch
+        // to them while the app still knows about the connection.
+        for saved in savedServers {
             if let nodeId = normalized(saved.alleycatNodeId),
                seenNodeIds.insert(nodeId).inserted,
                let token = try? AlleycatCredentialStore.shared.loadToken(nodeId: nodeId),
@@ -400,6 +464,22 @@ struct TerminalScreen: View {
         return options
     }
 
+    @discardableResult
+    private func refreshBackendOptions() -> [TerminalBackendOption] {
+        let options = loadBackendOptions(cwd: cwd)
+        backendOptions = options
+        return options
+    }
+
+    private func reconcileBackendOptions() {
+        let options = refreshBackendOptions()
+        guard let selectedBackendID,
+              options.contains(where: { $0.id == selectedBackendID }) else {
+            self.selectedBackendID = initialBackend(from: options, cwd: cwd).id
+            return
+        }
+    }
+
     private static func terminalSshAuth(from credential: SavedSSHCredential) -> TerminalSshAuth? {
         switch credential.method {
         case .password:
@@ -416,6 +496,12 @@ struct TerminalScreen: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func alleycatNodeId(fromServerId serverId: String) -> String? {
+        let trimmed = serverId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix(alleycatServerIdPrefix) else { return nil }
+        return normalized(String(trimmed.dropFirst(alleycatServerIdPrefix.count)))
+    }
+
     private func applyConfigSettings() {
         let config = TerminalConfig(
             theme: TerminalThemeChoice.preset(forId: storedThemeId),
@@ -427,6 +513,10 @@ struct TerminalScreen: View {
         )
         ghosttyRenderer.applyConfig(config)
     }
+}
+
+private enum TerminalChrome {
+    static let backendBarHeight: CGFloat = 51
 }
 
 private enum TerminalThemeChoice: String, CaseIterable, Identifiable {
@@ -625,8 +715,8 @@ private struct TerminalGridSize: Equatable {
     init(estimatedFor size: CGSize, fontSize: Double) {
         let cellWidth = max(6.0, fontSize * 0.6)
         let cellHeight = max(12.0, fontSize * 1.31)
-        let contentWidth = max(0, size.width - 28)
-        let contentHeight = max(0, size.height - 24)
+        let contentWidth = max(0, size.width)
+        let contentHeight = max(0, size.height)
         let computedCols = Int(contentWidth / cellWidth)
         let computedRows = Int(contentHeight / cellHeight)
         cols = UInt16(max(20, min(240, computedCols)))

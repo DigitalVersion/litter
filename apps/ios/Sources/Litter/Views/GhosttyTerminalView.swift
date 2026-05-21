@@ -28,6 +28,7 @@ final class GhosttyTerminalRenderer {
     private var hasNativeVisibleOutput = false
     private var didSetConfigDir = false
     private var isInvalidated = false
+    private var currentConfig: TerminalConfig?
 
     func attach(to view: UIView) {
         guard !isInvalidated else { return }
@@ -64,6 +65,9 @@ final class GhosttyTerminalRenderer {
             }
             renderer.subscribeBell(listener: listener)
             self.bellListener = listener
+            if let currentConfig {
+                applyConfigToRenderer(currentConfig, renderer: renderer)
+            }
             flushPendingOutput()
             updateNativeOutputVisibility(terminal: terminal)
         } catch {
@@ -74,6 +78,10 @@ final class GhosttyTerminalRenderer {
     func resize(width: CGFloat, height: CGFloat, scale: CGFloat) {
         terminal?.resize(toWidth: width, height: height, scale: scale)
         renderer?.notifyNeedsDraw()
+    }
+
+    func setGridSize(cols: UInt16, rows: UInt16) {
+        renderer?.setTerminalGridSize(cols: UInt32(cols), rows: UInt32(rows))
     }
 
     func write(_ data: Data) {
@@ -163,7 +171,12 @@ final class GhosttyTerminalRenderer {
     }
 
     func applyConfig(_ config: TerminalConfig) {
+        currentConfig = config
         guard let renderer else { return }
+        applyConfigToRenderer(config, renderer: renderer)
+    }
+
+    private func applyConfigToRenderer(_ config: TerminalConfig, renderer: TerminalRenderer) {
         if !didSetConfigDir {
             let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             if let dir = cachesDir?.appendingPathComponent("litter/terminal", isDirectory: true) {
@@ -173,6 +186,15 @@ final class GhosttyTerminalRenderer {
         }
         do {
             try renderer.applyConfig(config: config)
+            if let view = attachedView {
+                resize(
+                    width: view.bounds.width,
+                    height: view.bounds.height,
+                    scale: view.window?.screen.scale ?? UIScreen.main.scale
+                )
+            } else {
+                renderer.notifyNeedsDraw()
+            }
         } catch {
             // Surface lifecycle race or invalid path; let user retry from sheet.
         }
@@ -360,20 +382,35 @@ struct GhosttyTerminalView: UIViewRepresentable {
 
 // MARK: - Hidden first-responder + accessory bar
 
-/// Invisible UITextField overlaid on the Ghostty surface. UIKit hands us
-/// hardware key presses (via `pressesBegan`) and IME-decoded text (via
-/// `insertText`); we translate to Rust `TerminalKeyEvent`s + text and let
-/// the renderer forward to Ghostty's CSI/kitty encoder.
+/// Invisible first-responder overlaid on the Ghostty surface. We use a
+/// bare `UIView` (not `UITextField`) because UITextField routes the
+/// software keyboard through the `UITextInput` pipeline
+/// (`replaceRange:withText:`, marked-text APIs, etc.), and overrides of
+/// `insertText:` on UITextField are not invoked for every keystroke.
+/// `UIView + UIKeyInput` guarantees the system calls `insertText:` /
+/// `deleteBackward` for every character so we can forward each one to
+/// Ghostty's encoder.
 ///
 /// We also own the input accessory view so the row of Esc/Tab/Ctrl-…
 /// keys floats above the system keyboard automatically.
-final class LitterGhosttyInputView: UITextField {
+final class LitterGhosttyInputView: UIView, UIKeyInput, UITextInputTraits {
     weak var renderer: GhosttyTerminalRenderer?
+
+    // UITextInputTraits — terminal input is verbatim, no IME assistance.
+    var autocorrectionType: UITextAutocorrectionType = .no
+    var autocapitalizationType: UITextAutocapitalizationType = .none
+    var spellCheckingType: UITextSpellCheckingType = .no
+    var smartDashesType: UITextSmartDashesType = .no
+    var smartQuotesType: UITextSmartQuotesType = .no
+    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
+    var keyboardAppearance: UIKeyboardAppearance = .dark
+    var keyboardType: UIKeyboardType = .asciiCapable
+    var returnKeyType: UIReturnKeyType = .default
+
     /// Custom accessory bar. Setting this swaps the docked input
     /// accessory view above the keyboard.
     var accessoryBar: LitterTerminalAccessoryBar? {
         didSet {
-            inputAccessoryView = accessoryBar
             // If the keyboard is already up, ask UIKit to swap the
             // accessory in-place.
             if isFirstResponder {
@@ -393,44 +430,44 @@ final class LitterGhosttyInputView: UITextField {
     }
 
     private func configure() {
-        autocorrectionType = .no
-        autocapitalizationType = .none
-        spellCheckingType = .no
-        smartDashesType = .no
-        smartQuotesType = .no
-        smartInsertDeleteType = .no
-        keyboardAppearance = .dark
-        keyboardType = .asciiCapable
-        returnKeyType = .default
-        textColor = .clear
-        tintColor = .clear
         isOpaque = false
         backgroundColor = .clear
         accessibilityLabel = "Terminal input"
     }
 
-    override func insertText(_ text: String) {
-        renderer?.sendText(text)
+    // MARK: - UIKeyInput
+
+    var hasText: Bool { true }
+
+    func insertText(_ text: String) {
+        sendCommittedText(text)
     }
 
-    override func deleteBackward() {
-        renderer?.sendKeyEvent(
-            TerminalKeyEvent(
-                action: .press,
-                code: .backspace,
-                mods: TerminalKeyMods(shift: false, ctrl: false, alt: false, meta: false),
-                text: "",
-                repeat: false
-            )
-        )
+    func deleteBackward() {
+        sendRawBytes([0x7F])
     }
 
     override var canBecomeFirstResponder: Bool { true }
+
+    override var inputAccessoryView: UIView? { accessoryBar }
+
+    /// Touches must reach the host view's gesture recognizers (tap to
+    /// focus keyboard, long-press to select, scroll pan, pinch). Drop the
+    /// overlay out of hit-testing entirely so it never swallows touches
+    /// even though it covers the full host area.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        nil
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
             guard let key = press.key else { continue }
+            if let raw = Self.rawBytes(for: key) {
+                renderer?.sendRawBytes(raw)
+                handled = true
+                continue
+            }
             if let event = Self.terminalEvent(for: key, action: .press, repeated: false) {
                 renderer?.sendKeyEvent(event)
                 handled = true
@@ -438,6 +475,49 @@ final class LitterGhosttyInputView: UITextField {
         }
         if !handled {
             super.pressesBegan(presses, with: event)
+        }
+    }
+
+    private func sendCommittedText(_ text: String) {
+        guard !text.isEmpty else { return }
+        // UIKeyInput delivers Return as "\n", but PTYs expect carriage
+        // return for Enter. Keep other committed text byte-for-byte.
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n", with: "\r")
+        guard let data = normalized.data(using: .utf8), !data.isEmpty else { return }
+        renderer?.sendRawBytes(data)
+    }
+
+    private func sendRawBytes(_ bytes: [UInt8]) {
+        renderer?.sendRawBytes(Data(bytes))
+    }
+
+    private static func rawBytes(for key: UIKey) -> Data? {
+        if key.modifierFlags.contains(.control),
+           let scalar = key.charactersIgnoringModifiers.lowercased().unicodeScalars.first,
+           scalar.value >= 97,
+           scalar.value <= 122 {
+            return Data([UInt8(scalar.value - 96)])
+        }
+
+        switch key.keyCode {
+        case .keyboardReturnOrEnter: return Data([0x0D])
+        case .keyboardTab: return Data([0x09])
+        case .keyboardDeleteOrBackspace: return Data([0x7F])
+        case .keyboardEscape: return Data([0x1B])
+        case .keyboardSpacebar where key.modifierFlags.contains(.control): return Data([0x00])
+        case .keyboardUpArrow: return Data([0x1B, 0x5B, 0x41])
+        case .keyboardDownArrow: return Data([0x1B, 0x5B, 0x42])
+        case .keyboardRightArrow: return Data([0x1B, 0x5B, 0x43])
+        case .keyboardLeftArrow: return Data([0x1B, 0x5B, 0x44])
+        case .keyboardHome: return Data([0x1B, 0x5B, 0x48])
+        case .keyboardEnd: return Data([0x1B, 0x5B, 0x46])
+        case .keyboardPageUp: return Data([0x1B, 0x5B, 0x35, 0x7E])
+        case .keyboardPageDown: return Data([0x1B, 0x5B, 0x36, 0x7E])
+        case .keyboardDeleteForward: return Data([0x1B, 0x5B, 0x33, 0x7E])
+        case .keyboardInsert: return Data([0x1B, 0x5B, 0x32, 0x7E])
+        default: return nil
         }
     }
 
@@ -878,7 +958,7 @@ final class TerminalSelectionOverlayView: UIView {
 /// selection-handle overlay, and the hidden first-responder text field
 /// that owns the keyboard + accessory bar. Coordinates every gesture the
 /// touch UX needs: long-press to select, drag handles to extend, tap to
-/// toggle keyboard / open links, pinch to resize, two-finger pan to
+/// focus keyboard / open links, pinch to resize, two-finger pan to
 /// scroll, and one-finger pan when an in-terminal mouse-tracking app
 /// captures the mouse.
 final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
@@ -914,6 +994,7 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
     private var selectionAnchorPos: TerminalCellPosition?
     private var pinchStartFontSize: Double = 13.0
     private var lastBellTimestamp: TimeInterval = 0
+    private var keyboardIsVisible = false
     private var isDismantled = false
 
     private let keyboardOverlay = LitterGhosttyInputView()
@@ -956,7 +1037,10 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
             keyboardOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
             keyboardOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        keyboardOverlay.alpha = 0
+        // The overlay is a bare UIView (transparent by default) — it only
+        // exists to be first responder + own the accessory bar. Its
+        // `hitTest` override returns nil so touches fall through to the
+        // host view's gesture recognizers.
         keyboardOverlay.accessoryBar = accessoryBar
 
         selectionOverlay.translatesAutoresizingMaskIntoConstraints = false
@@ -999,9 +1083,9 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
     }
 
     override func becomeFirstResponder() -> Bool {
-        let result = super.becomeFirstResponder()
-        keyboardOverlay.becomeFirstResponder()
-        return result
+        let hostResult = super.becomeFirstResponder()
+        let inputResult = focusTerminalInput()
+        return hostResult || inputResult
     }
 
     private func installGestureRecognizers() {
@@ -1087,7 +1171,7 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         // If a selection exists, a tap dismisses it. Otherwise check for
-        // a tappable hyperlink under the touch point; absent that, toggle
+        // a tappable hyperlink under the touch point; absent that, focus
         // the keyboard.
         if renderer?.currentSelectionRange() != nil {
             renderer?.selectionClear()
@@ -1098,11 +1182,7 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
             UIApplication.shared.open(url, options: [:], completionHandler: nil)
             return
         }
-        if keyboardOverlay.isFirstResponder {
-            keyboardOverlay.resignFirstResponder()
-        } else {
-            keyboardOverlay.becomeFirstResponder()
-        }
+        focusTerminalInput(forceRefresh: true)
     }
 
     private func linkAtPoint(viewPoint: CGPoint) -> TerminalLink? {
@@ -1332,9 +1412,13 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
             }
             keyboardOverlay.renderer = renderer
             selectionOverlay.setContentScale(contentScale)
-            _ = becomeFirstResponder()
             renderer?.attach(to: self)
             renderer?.setOccluded(false)
+            // Re-attach can happen after `parkForTemporaryDetach()` left
+            // focus = false. Restore it so the Ghostty surface accepts
+            // text input again.
+            renderer?.setFocused(true)
+            _ = focusTerminalInput()
         } else {
             parkForTemporaryDetach()
         }
@@ -1344,6 +1428,7 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
     /// during navigation transitions. Park focus, but keep recognizers and
     /// the accessory bar intact in case the same view is reattached.
     private func parkForTemporaryDetach() {
+        keyboardIsVisible = false
         keyboardOverlay.resignFirstResponder()
         _ = resignFirstResponder()
         renderer?.setFocused(false)
@@ -1356,7 +1441,9 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
         isUserInteractionEnabled = false
         gestureRecognizers?.forEach { $0.isEnabled = false }
         keyboardOverlay.renderer = nil
-        keyboardOverlay.inputAccessoryView = nil
+        // Clear the accessory bar reference; the overlay's
+        // `inputAccessoryView` override reads from `accessoryBar` so
+        // setting it to nil drops the docked bar above the keyboard.
         keyboardOverlay.accessoryBar = nil
         keyboardOverlay.resignFirstResponder()
         endEditing(true)
@@ -1374,6 +1461,7 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
     }
 
     @objc private func keyboardFrameWillChange(_ notification: Notification) {
+        updateKeyboardVisibility(from: notification)
         // SwiftUI's GeometryReader receives a new size when SwiftUI's
         // safe-area path adjusts for the keyboard; that re-fires
         // `resizeTerminal(for:)` on the SwiftUI side. We re-trigger
@@ -1385,10 +1473,45 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
     }
 
     @objc private func keyboardWillHide(_ notification: Notification) {
+        keyboardIsVisible = false
         setNeedsLayout()
     }
 
     // MARK: - Helpers
+
+    @discardableResult
+    private func focusTerminalInput(forceRefresh: Bool = false) -> Bool {
+        guard !isDismantled, window != nil else { return false }
+        if keyboardOverlay.accessoryBar == nil {
+            keyboardOverlay.accessoryBar = accessoryBar
+        }
+        keyboardOverlay.renderer = renderer
+        renderer?.setFocused(true)
+
+        if keyboardOverlay.isFirstResponder {
+            keyboardOverlay.reloadInputViews()
+            if forceRefresh && !keyboardIsVisible {
+                keyboardOverlay.resignFirstResponder()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.window != nil, !self.isDismantled else { return }
+                    self.keyboardOverlay.becomeFirstResponder()
+                    self.renderer?.setFocused(true)
+                }
+            }
+            return true
+        }
+
+        return keyboardOverlay.becomeFirstResponder()
+    }
+
+    private func updateKeyboardVisibility(from notification: Notification) {
+        guard let window,
+              let screenFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            return
+        }
+        let keyboardFrame = window.convert(screenFrame, from: nil)
+        keyboardIsVisible = keyboardFrame.intersects(window.bounds) && keyboardFrame.minY < window.bounds.maxY
+    }
 
     private var contentScale: CGFloat {
         window?.screen.scale ?? UIScreen.main.scale

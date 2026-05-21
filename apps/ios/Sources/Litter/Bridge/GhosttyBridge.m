@@ -456,6 +456,11 @@ static ghostty_input_key_e LitterGhosttyKeyToGhosttyKey(LitterGhosttyKey key) {
     ghostty_config_finalize(config);
     ghostty_app_update_config(_app, config);
     ghostty_surface_update_config(_surface, config);
+    if (_view != nil) {
+        CGFloat scale = _view.window.screen.scale ?: UIScreen.mainScreen.scale;
+        [self resizeToWidth:_view.bounds.size.width height:_view.bounds.size.height scale:scale];
+    }
+    [self draw];
     ghostty_config_free(config);
     return YES;
 }

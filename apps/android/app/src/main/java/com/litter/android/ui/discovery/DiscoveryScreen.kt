@@ -14,13 +14,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -47,11 +44,14 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -888,48 +888,33 @@ fun DiscoveryScreen(
     }
 
     if (showAlleycatSheet) {
-        androidx.compose.ui.window.Dialog(
+        @OptIn(ExperimentalMaterial3Api::class)
+        ModalBottomSheet(
             onDismissRequest = { showAlleycatSheet = false },
-            properties = androidx.compose.ui.window.DialogProperties(
-                usePlatformDefaultWidth = false,
-                dismissOnBackPress = true,
-                dismissOnClickOutside = false,
-            ),
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = LitterTheme.background,
         ) {
-            androidx.compose.foundation.layout.Box(
-                modifier = Modifier
-                    // Without fillMaxHeight the Dialog Box wraps content,
-                    // and the inner Column's `verticalScroll` has no height
-                    // bound to scroll within — so long forms (especially
-                    // when many agents are listed) get clipped offscreen
-                    // with no way to reach the Connect button.
-                    .fillMaxSize()
-                    .background(LitterTheme.background)
-                    .systemBarsPadding()
-                    .imePadding(),
-            ) {
-                AlleycatAddServerSheet(
-                    onDismiss = { showAlleycatSheet = false },
-                    startScanningOnAppear = true,
-                    onConnected = { result ->
-                        showAlleycatSheet = false
-                        scope.launch {
-                            SavedServerStore.rememberAlleycat(
-                                context = context,
-                                serverId = result.serverId,
-                                displayName = result.displayName,
-                                nodeId = result.nodeId,
-                                relay = result.params.relay,
-                                agentName = result.agentName,
-                                agentWire = alleycatWireStorageValue(result.agentWire),
-                            )
-                            reloadSavedServers()
-                            appModel.refreshSnapshot()
-                            pendingAutoNavigateServerId = result.serverId
-                        }
-                    },
-                )
-            }
+            AlleycatAddServerSheet(
+                onDismiss = { showAlleycatSheet = false },
+                startScanningOnAppear = true,
+                onConnected = { result ->
+                    showAlleycatSheet = false
+                    scope.launch {
+                        SavedServerStore.rememberAlleycat(
+                            context = context,
+                            serverId = result.serverId,
+                            displayName = result.displayName,
+                            nodeId = result.nodeId,
+                            relay = result.params.relay,
+                            agentName = result.agentName,
+                            agentWire = alleycatWireStorageValue(result.agentWire),
+                        )
+                        reloadSavedServers()
+                        appModel.refreshSnapshot()
+                        pendingAutoNavigateServerId = result.serverId
+                    }
+                },
+            )
         }
     }
 }

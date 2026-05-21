@@ -984,8 +984,16 @@ Java_com_litter_android_core_bridge_GhosttyRendererBridge_nativeApplyConfig(
     }
     ghostty_config_load_file(config, path_cstr);
     ghostty_config_finalize(config);
+    if (!makeCurrent(state)) {
+        ghostty_config_free(config);
+        env->ReleaseStringUTFChars(path, path_cstr);
+        return JNI_FALSE;
+    }
     ghostty_app_update_config(state->app, config);
     ghostty_surface_update_config(state->surface, config);
+    ghostty_surface_set_content_scale(state->surface, state->scale, state->scale);
+    ghostty_surface_set_size(state->surface, state->width, state->height);
+    renderSurface(state);
     ghostty_config_free(config);
     env->ReleaseStringUTFChars(path, path_cstr);
     return JNI_TRUE;

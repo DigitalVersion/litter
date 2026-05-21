@@ -404,8 +404,8 @@ private fun TerminalOutputPane(
                         },
                         color = LitterTheme.accent,
                         fontFamily = LitterTheme.monoFont,
-                        fontSize = 13.sp,
-                        lineHeight = 17.sp,
+                        fontSize = TerminalConfigPrefs.fontSize.sp,
+                        lineHeight = (TerminalConfigPrefs.fontSize * 1.31f).sp,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -791,8 +791,8 @@ private data class TerminalGridSize(
             density: androidx.compose.ui.unit.Density,
             fontSizeSp: Float,
         ): TerminalGridSize = with(density) {
-            val contentWidth = (widthPx - 32.dp.roundToPx()).coerceAtLeast(0)
-            val contentHeight = (heightPx - 20.dp.roundToPx()).coerceAtLeast(0)
+            val contentWidth = widthPx.coerceAtLeast(0)
+            val contentHeight = heightPx.coerceAtLeast(0)
             val cellWidthPx = (fontSizeSp.coerceAtLeast(8f) * 0.6f).sp.toPx()
             val cellHeightPx = (fontSizeSp.coerceAtLeast(8f) * 1.31f).sp.toPx()
             val cols = (contentWidth / cellWidthPx.coerceAtLeast(1f))

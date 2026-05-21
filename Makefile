@@ -137,7 +137,11 @@ endif
 
 PACKAGE_CARGO_ENV := CARGO_INCREMENTAL=0
 
-DEV_CARGO_ENV := env -u CARGO_INCREMENTAL
+# Local dev iteration: enable incremental compilation and disable sccache.
+# sccache caches by source hash so it misses on every edit, and it rejects
+# CARGO_INCREMENTAL=1. Incremental wins for small-change rebuilds. CI calls
+# build-rust.sh directly with its own env, so it bypasses this var.
+DEV_CARGO_ENV := env -u RUSTC_WRAPPER CARGO_INCREMENTAL=1
 KITTYLITTER_CARGO_ENV := $(DEV_CARGO_ENV)
 ifeq ($(firstword $(MAKECMDGOALS)),kittylitter)
   KITTYLITTER_GOAL_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -320,6 +324,18 @@ mac-direct-fast-run: mac-direct-fast
 	@pkill -9 -f "DeveloperID-maccatalyst/Litter.app" 2>/dev/null; true
 	@/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister -f $(MAC_DIRECT_DERIVED)/Build/Products/DeveloperID-maccatalyst/Litter.app
 	@open $(MAC_DIRECT_DERIVED)/Build/Products/DeveloperID-maccatalyst/Litter.app
+loop-sim:
+	@$(ROOT)/tools/scripts/loop-ios.sh sim
+
+loop-sim-run:
+	@$(ROOT)/tools/scripts/loop-ios.sh sim-run
+
+loop-device:
+	@$(ROOT)/tools/scripts/loop-ios.sh device
+
+loop-device-run:
+	@$(ROOT)/tools/scripts/loop-ios.sh device-run
+
 ios-sim-run: ios-sim-fast
 	@echo "==> Installing and launching on booted simulator with saved logs/profile..."
 	@cd $(ROOT) && \
@@ -597,6 +613,7 @@ ios-build-sim: verify-ios-project
 		-scheme $(IOS_SCHEME) \
 		-configuration $(XCODE_CONFIG) \
 		-destination 'platform=iOS Simulator,name=$(IOS_SIM_DEVICE)' \
+		COMPILER_INDEX_STORE_ENABLE=NO \
 		build
 
 ios-build-sim-fast: verify-ios-project
@@ -605,6 +622,8 @@ ios-build-sim-fast: verify-ios-project
 		-scheme $(IOS_SCHEME) \
 		-configuration $(XCODE_CONFIG) \
 		-destination 'platform=iOS Simulator,name=$(IOS_SIM_DEVICE)' \
+		COMPILER_INDEX_STORE_ENABLE=NO \
+		ONLY_ACTIVE_ARCH=YES \
 		build
 
 ios-build-device: verify-ios-project
@@ -614,6 +633,7 @@ ios-build-device: verify-ios-project
 		-configuration $(XCODE_CONFIG) \
 		-destination 'generic/platform=iOS' \
 		-allowProvisioningUpdates \
+		COMPILER_INDEX_STORE_ENABLE=NO \
 		build
 
 ios-build-device-fast: verify-ios-project
@@ -623,6 +643,8 @@ ios-build-device-fast: verify-ios-project
 		-configuration $(XCODE_CONFIG) \
 		-destination 'generic/platform=iOS' \
 		-allowProvisioningUpdates \
+		COMPILER_INDEX_STORE_ENABLE=NO \
+		ONLY_ACTIVE_ARCH=YES \
 		build
 
 ios-build: ios-build-sim
@@ -660,6 +682,8 @@ watch-sim: verify-ios-project
 		-scheme $(WATCH_SCHEME) \
 		-configuration $(XCODE_CONFIG) \
 		-destination '$(WATCH_BUILD_DESTINATION)' \
+		COMPILER_INDEX_STORE_ENABLE=NO \
+		ONLY_ACTIVE_ARCH=YES \
 		build
 
 watch-device: verify-ios-project
@@ -669,6 +693,8 @@ watch-device: verify-ios-project
 		-configuration $(XCODE_CONFIG) \
 		-destination 'generic/platform=watchOS' \
 		-allowProvisioningUpdates \
+		COMPILER_INDEX_STORE_ENABLE=NO \
+		ONLY_ACTIVE_ARCH=YES \
 		build
 
 # Add a newly paired Apple Watch's UDID to the developer portal so device

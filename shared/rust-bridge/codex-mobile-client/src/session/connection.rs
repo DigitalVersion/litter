@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use codex_app_server_client::{
     AppServerClient, AppServerEvent, RemoteAppServerClient, RemoteAppServerConnectArgs,
+    RemoteAppServerEndpoint,
 };
 use codex_app_server_protocol::{
     ClientNotification, ClientRequest, JSONRPCErrorError, RequestId, Result as JsonRpcResult,
@@ -681,6 +682,7 @@ impl ServerSession {
             config: Arc::new(resolved_config),
             cli_overrides,
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements,
             feedback,
             log_db: None,
@@ -700,6 +702,7 @@ impl ServerSession {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
+                    request_attestation: false,
                     opt_out_notification_methods: None,
                 }),
             },
@@ -1168,8 +1171,10 @@ pub(crate) fn remote_connect_args(config: &ServerConfig) -> (String, RemoteAppSe
     };
 
     let args = RemoteAppServerConnectArgs {
-        websocket_url: url.clone(),
-        auth_token: None,
+        endpoint: RemoteAppServerEndpoint::WebSocket {
+            websocket_url: url.clone(),
+            auth_token: None,
+        },
         client_name: "Litter".to_string(),
         client_version: "1.0".to_string(),
         experimental_api: true,
@@ -1208,8 +1213,16 @@ pub(crate) async fn connect_remote_client_over_app_server_proxy(
     // The SSH exec proxy supplies the connected byte stream. The WebSocket
     // client still needs a syntactically valid URI for the HTTP Upgrade
     // request, so use a synthetic loopback-ish URL and keep the real transport
-    // in the label passed to `connect_websocket_stream`.
-    proxy_args.websocket_url = APP_SERVER_PROXY_WEBSOCKET_URL.to_string();
+    // in the label passed to `connect_websocket_stream`. Preserve any auth_token
+    // that was carried in `args.endpoint` so the Bearer header is still sent.
+    let preserved_auth_token = match &proxy_args.endpoint {
+        RemoteAppServerEndpoint::WebSocket { auth_token, .. } => auth_token.clone(),
+        RemoteAppServerEndpoint::UnixSocket { .. } => None,
+    };
+    proxy_args.endpoint = RemoteAppServerEndpoint::WebSocket {
+        websocket_url: APP_SERVER_PROXY_WEBSOCKET_URL.to_string(),
+        auth_token: preserved_auth_token,
+    };
     let stream = ssh_client
         .open_app_server_proxy_stream(codex_path, remote_shell, None)
         .await
@@ -1942,8 +1955,10 @@ mod tests {
 
     fn test_remote_args(label: &str) -> RemoteAppServerConnectArgs {
         RemoteAppServerConnectArgs {
-            websocket_url: format!("test://{label}"),
-            auth_token: None,
+            endpoint: RemoteAppServerEndpoint::WebSocket {
+                websocket_url: format!("test://{label}"),
+                auth_token: None,
+            },
             client_name: "LitterTest".to_string(),
             client_version: "0".to_string(),
             experimental_api: true,
@@ -2017,7 +2032,7 @@ mod tests {
             }
         });
         AppServerClient::Remote(
-            RemoteAppServerClient::connect_json_line_stream(
+            codex_slingshot::json_line_wire::connect_json_line_stream(
                 client_io,
                 test_remote_args(label),
                 label.to_string(),

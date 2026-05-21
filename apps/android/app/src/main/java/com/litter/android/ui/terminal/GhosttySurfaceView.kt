@@ -5,8 +5,10 @@ import android.content.Intent
 import android.graphics.Color
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
+import android.text.InputType
 import android.view.Choreographer
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
@@ -15,6 +17,7 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.WindowInsets
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -430,7 +433,7 @@ private class GhosttyAndroidSurfaceView(
                     runCatching { context.startActivity(intent) }
                     return true
                 }
-                toggleIme()
+                showIme()
                 return true
             }
         },
@@ -448,7 +451,12 @@ private class GhosttyAndroidSurfaceView(
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = EditorInfo.TYPE_NULL
+        outAttrs.inputType = (
+            InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        )
         outAttrs.imeOptions = (
             EditorInfo.IME_FLAG_NO_EXTRACT_UI or
                 EditorInfo.IME_FLAG_NO_FULLSCREEN or
@@ -672,6 +680,8 @@ private class GhosttyAndroidSurfaceView(
         ensureConfigDir(renderer)
         try {
             renderer.applyConfig(config)
+            rendererSurface?.resize(widthPx, heightPx, scale)
+            scheduleFrame()
         } catch (_: Exception) {
             // Renderer was detached between the null-check and the call.
         }
@@ -761,15 +771,20 @@ private class GhosttyAndroidSurfaceView(
         }
     }
 
-    private fun toggleIme() {
+    private fun showIme() {
+        requestFocus()
+        post {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                windowInsetsController?.show(WindowInsets.Type.ime())
+            }
+            showImeWithInputMethodManager()
+        }
+    }
+
+    private fun showImeWithInputMethodManager() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             ?: return
-        if (imm.isAcceptingText) {
-            imm.hideSoftInputFromWindow(windowToken, 0)
-        } else {
-            requestFocus()
-            imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-        }
+        imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 }
 

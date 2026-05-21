@@ -1188,10 +1188,10 @@ fn render_user_input(inputs: &[UserInput]) -> (String, Vec<String>) {
                     text_parts.push(trimmed);
                 }
             }
-            UserInput::Image { url } => {
+            UserInput::Image { url, .. } => {
                 images.push(url.clone());
             }
-            UserInput::LocalImage { path } => {
+            UserInput::LocalImage { path, .. } => {
                 images.push(format!("file://{}", path.display()));
             }
             UserInput::Skill { name, path } => {

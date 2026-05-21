@@ -24,7 +24,7 @@ if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -z "${ANDROID_NDK_ROOT:-}" ]; then
   exit 1
 fi
 
-if command -v sccache >/dev/null 2>&1; then
+if [ "${CARGO_INCREMENTAL:-}" != "1" ] && command -v sccache >/dev/null 2>&1; then
   export RUSTC_WRAPPER="$(command -v sccache)"
 fi
 

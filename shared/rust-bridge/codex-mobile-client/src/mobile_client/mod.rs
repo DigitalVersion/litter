@@ -3788,6 +3788,7 @@ impl MobileClient {
                 }],
                 responsesapi_client_metadata: None,
                 cwd: None,
+                runtime_workspace_roots: None,
                 approval_policy: None,
                 approvals_reviewer: None,
                 sandbox_policy: None,

@@ -40,9 +40,7 @@ pub(crate) async fn open(
     let (stream, session) =
         crate::alleycat::connect_jsonl_agent_stream(&endpoint, params, "shell".to_string())
             .await
-            .map_err(|error| TerminalError::Backend {
-                detail: format!("connecting shell bridge: {error}"),
-            })?;
+            .map_err(map_shell_connect_error)?;
     let (reader, mut writer) = tokio::io::split(stream);
     let reader = BufReader::new(reader);
     let (output_tx, output_rx) = mpsc::channel(256);
@@ -92,6 +90,37 @@ pub(crate) async fn open(
         pending_responses,
     });
     Ok((backend, output_rx))
+}
+
+fn map_shell_connect_error(error: crate::alleycat::AlleycatError) -> TerminalError {
+    match error {
+        crate::alleycat::AlleycatError::Transport(message) => {
+            if is_shell_agent_unavailable_error(&message) {
+                TerminalError::Backend {
+                    detail: format!(
+                        "Remote shell is unavailable on this Alleycat host. Update and restart kittylitter/alleycat on the host, or enable the host [agents.shell] config. Host said: {message}"
+                    ),
+                }
+            } else {
+                TerminalError::Backend {
+                    detail: format!("connecting shell bridge: {message}"),
+                }
+            }
+        }
+        other => TerminalError::Backend {
+            detail: format!("connecting shell bridge: {other}"),
+        },
+    }
+}
+
+fn is_shell_agent_unavailable_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("agent `shell` is disabled or unknown")
+        || normalized.contains("agent 'shell' is disabled or unknown")
+        || normalized.contains("agent shell is disabled or unknown")
+        || normalized.contains("unknown agent `shell`")
+        || normalized.contains("unknown agent 'shell'")
+        || normalized.contains("unknown agent: shell")
 }
 
 async fn tracked_request<W>(
@@ -379,4 +408,20 @@ struct ShellOutputNotification {
 struct ShellExitNotification {
     session_id: String,
     code: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_shell_agent_unavailable_error;
+
+    #[test]
+    fn recognizes_alleycat_shell_agent_unavailable_errors() {
+        assert!(is_shell_agent_unavailable_error(
+            "agent `shell` is disabled or unknown"
+        ));
+        assert!(is_shell_agent_unavailable_error("unknown agent: shell"));
+        assert!(!is_shell_agent_unavailable_error(
+            "agent `codex` is disabled or unknown"
+        ));
+    }
 }

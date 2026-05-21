@@ -60,7 +60,7 @@ object TerminalConfigPrefs {
     }
 
     fun setFontSize(context: Context, value: Float) {
-        val clamped = value.coerceIn(10f, 18f)
+        val clamped = value.coerceIn(10f, 24f)
         fontSize = clamped
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putFloat(KEY_FONT_SIZE, clamped).apply()

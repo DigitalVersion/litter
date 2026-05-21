@@ -15,7 +15,9 @@ use alleycat_pi_bridge::PiBridge;
 use alleycat_pi_bridge::index::{PiHydrator, PiSessionInfo};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use codex_app_server_client::{AppServerClient, RemoteAppServerClient, RemoteAppServerConnectArgs};
+use codex_app_server_client::{
+    AppServerClient, RemoteAppServerConnectArgs, RemoteAppServerEndpoint,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, duplex};
 use tracing::{debug, info, warn};
@@ -554,15 +556,17 @@ async fn connect_bridge_stream(
     let label = format!("ssh-bridge://{}", runtime_label(&kind));
     info!("ssh bridge stream connect start kind={kind:?} label={label}");
     let args = RemoteAppServerConnectArgs {
-        websocket_url: label.clone(),
-        auth_token: None,
+        endpoint: RemoteAppServerEndpoint::WebSocket {
+            websocket_url: label.clone(),
+            auth_token: None,
+        },
         client_name: "Litter".to_string(),
         client_version: "1.0".to_string(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: 256,
     };
-    let remote = RemoteAppServerClient::connect_json_line_stream(client_io, args, label)
+    let remote = codex_slingshot::json_line_wire::connect_json_line_stream(client_io, args, label)
         .await
         .map_err(|error| SshBridgeError::HandshakeFailed(error.to_string()))?;
     info!("ssh bridge stream connect ready kind={kind:?}");
@@ -581,8 +585,10 @@ async fn connect_codex_via_ssh(
         }
     };
     let args = RemoteAppServerConnectArgs {
-        websocket_url: websocket_url.clone(),
-        auth_token: None,
+        endpoint: RemoteAppServerEndpoint::WebSocket {
+            websocket_url: websocket_url.clone(),
+            auth_token: None,
+        },
         client_name: "Litter".to_string(),
         client_version: "1.0".to_string(),
         experimental_api: true,

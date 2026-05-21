@@ -1299,11 +1299,11 @@ mod tests {
             model_provider: "openai".to_string(),
             service_tier: None,
             cwd: test_abs_path("/tmp"),
+            runtime_workspace_roots: Vec::new(),
             instruction_sources: Vec::new(),
             approval_policy: upstream::AskForApproval::Never,
             approvals_reviewer: upstream::ApprovalsReviewer::User,
             sandbox: upstream::SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
             active_permission_profile: None,
             reasoning_effort: None,
         };

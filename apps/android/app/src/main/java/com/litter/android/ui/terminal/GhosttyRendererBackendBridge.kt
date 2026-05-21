@@ -56,7 +56,11 @@ internal class GhosttyRendererBackendBridge(
     }
 
     override fun applyConfigFile(path: String) {
-        runOnMain { surface.applyConfig(path) }
+        runOnMainBlocking {
+            surface.applyConfig(path)
+            onRequestRedraw()
+            true
+        }
     }
 
     override fun dispatchKey(event: TerminalKeyEvent) {

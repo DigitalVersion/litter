@@ -42,9 +42,9 @@ use super::snapshot::{
     QueuedFollowUpDraft, ServerHealthSnapshot, ServerMutatingCommandKind, ServerSnapshot,
     ServerTransportDiagnostics, TerminalSessionSnapshot, ThreadSnapshot,
 };
-use crate::terminal::TerminalBackendKind;
 use super::updates::{AppStoreUpdateRecord, ThreadStreamingDeltaKind};
 use super::voice::{VoiceDerivedUpdate, VoiceRealtimeState};
+use crate::terminal::TerminalBackendKind;
 
 const USER_INPUT_NOTE_PREFIX: &str = "user_note: ";
 const USER_INPUT_OTHER_OPTION_LABEL: &str = "None of the above";
@@ -2756,7 +2756,9 @@ impl AppStoreReducer {
             snapshot.active_terminal_id = Some(id);
         }
         drop(snapshot);
-        let _ = self.updates_tx.send(AppStoreUpdateRecord::TerminalSessionsChanged);
+        let _ = self
+            .updates_tx
+            .send(AppStoreUpdateRecord::TerminalSessionsChanged);
     }
 
     /// Append output bytes to the session's ring buffer, capped at
@@ -2764,11 +2766,7 @@ impl AppStoreReducer {
     /// if `id` is unknown.
     pub fn append_terminal_output(&self, id: &str, bytes: &[u8]) {
         let mut snapshot = self.snapshot.write().expect("app store lock poisoned");
-        let Some(session) = snapshot
-            .terminal_sessions
-            .iter_mut()
-            .find(|s| s.id == id)
-        else {
+        let Some(session) = snapshot.terminal_sessions.iter_mut().find(|s| s.id == id) else {
             return;
         };
         push_ring(&mut session.output_tail, bytes, TERMINAL_OUTPUT_TAIL_LIMIT);
@@ -2783,11 +2781,7 @@ impl AppStoreReducer {
     /// Update the session's row/col dimensions after a successful resize.
     pub fn update_terminal_size(&self, id: &str, cols: u16, rows: u16) {
         let mut snapshot = self.snapshot.write().expect("app store lock poisoned");
-        if let Some(session) = snapshot
-            .terminal_sessions
-            .iter_mut()
-            .find(|s| s.id == id)
-        {
+        if let Some(session) = snapshot.terminal_sessions.iter_mut().find(|s| s.id == id) {
             session.cols = cols;
             session.rows = rows;
             session.last_activity_ts_ms = now_ms();
@@ -2798,11 +2792,7 @@ impl AppStoreReducer {
     /// being active.
     pub fn mark_terminal_exited(&self, id: &str, exit_code: i32) {
         let mut snapshot = self.snapshot.write().expect("app store lock poisoned");
-        if let Some(session) = snapshot
-            .terminal_sessions
-            .iter_mut()
-            .find(|s| s.id == id)
-        {
+        if let Some(session) = snapshot.terminal_sessions.iter_mut().find(|s| s.id == id) {
             session.phase = AppTerminalSessionPhase::Exited;
             session.exit_code = Some(exit_code);
             session.last_activity_ts_ms = now_ms();
@@ -2811,7 +2801,9 @@ impl AppStoreReducer {
             snapshot.active_terminal_id = None;
         }
         drop(snapshot);
-        let _ = self.updates_tx.send(AppStoreUpdateRecord::TerminalSessionsChanged);
+        let _ = self
+            .updates_tx
+            .send(AppStoreUpdateRecord::TerminalSessionsChanged);
     }
 
     /// Remove a session's snapshot entirely. Used after the caller has
@@ -2821,13 +2813,12 @@ impl AppStoreReducer {
         let mut snapshot = self.snapshot.write().expect("app store lock poisoned");
         snapshot.terminal_sessions.retain(|s| s.id != id);
         if snapshot.active_terminal_id.as_deref() == Some(id) {
-            snapshot.active_terminal_id = snapshot
-                .terminal_sessions
-                .last()
-                .map(|s| s.id.clone());
+            snapshot.active_terminal_id = snapshot.terminal_sessions.last().map(|s| s.id.clone());
         }
         drop(snapshot);
-        let _ = self.updates_tx.send(AppStoreUpdateRecord::TerminalSessionsChanged);
+        let _ = self
+            .updates_tx
+            .send(AppStoreUpdateRecord::TerminalSessionsChanged);
     }
 
     /// Set the currently-focused terminal session id. The id must match
@@ -2845,7 +2836,9 @@ impl AppStoreReducer {
         }
         snapshot.active_terminal_id = next;
         drop(snapshot);
-        let _ = self.updates_tx.send(AppStoreUpdateRecord::TerminalSessionsChanged);
+        let _ = self
+            .updates_tx
+            .send(AppStoreUpdateRecord::TerminalSessionsChanged);
     }
 
     /// Take a snapshot of a single terminal session. Cheap clone of the
@@ -3255,8 +3248,8 @@ fn render_user_input(inputs: &[upstream::UserInput]) -> (String, Vec<String>) {
                     text_parts.push(trimmed);
                 }
             }
-            upstream::UserInput::Image { url } => images.push(url.clone()),
-            upstream::UserInput::LocalImage { path } => {
+            upstream::UserInput::Image { url, .. } => images.push(url.clone()),
+            upstream::UserInput::LocalImage { path, .. } => {
                 images.push(format!("file://{}", path.display()));
             }
             upstream::UserInput::Skill { name, path } => {
