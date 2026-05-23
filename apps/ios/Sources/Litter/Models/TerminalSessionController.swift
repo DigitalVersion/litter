@@ -72,6 +72,7 @@ final class TerminalSessionController {
                 return
             }
             let listener = TerminalOutputRelay(owner: self, generation: generation)
+            listener.setOutputSink(outputSink)
             session.subscribeOutput(listener: listener)
             outputListener = listener
             phase = .running
@@ -133,6 +134,7 @@ final class TerminalSessionController {
 
     func setOutputSink(_ sink: ((Data) -> Void)?) {
         outputSink = sink
+        outputListener?.setOutputSink(sink)
     }
 
     private static func sshHostTrustChallenge(
@@ -187,6 +189,7 @@ final class TerminalSessionController {
         eventGeneration &+= 1
         guard let id = sessionId else { return }
         sessionId = nil
+        outputListener?.deactivate()
         outputListener = nil
         if appStore.activeTerminalId() == id {
             appStore.setActiveTerminalId(id: nil)
@@ -199,8 +202,11 @@ final class TerminalSessionController {
 
     fileprivate func appendOutput(_ data: Data, generation: Int) {
         guard generation == eventGeneration else { return }
+        if let outputSink {
+            outputSink(data)
+            return
+        }
         output += String(decoding: data, as: UTF8.self)
-        outputSink?(data)
         trimOutputIfNeeded()
     }
 
@@ -224,13 +230,40 @@ final class TerminalSessionController {
 private final class TerminalOutputRelay: TerminalOutputListener, @unchecked Sendable {
     private weak var owner: TerminalSessionController?
     private let generation: Int
+    private let lock = NSLock()
+    private var outputSink: ((Data) -> Void)?
+    private var active = true
 
     init(owner: TerminalSessionController, generation: Int) {
         self.owner = owner
         self.generation = generation
     }
 
+    func setOutputSink(_ sink: ((Data) -> Void)?) {
+        lock.lock()
+        outputSink = sink
+        lock.unlock()
+    }
+
+    func deactivate() {
+        lock.lock()
+        active = false
+        outputSink = nil
+        lock.unlock()
+    }
+
     func onBytes(data: Data) {
+        lock.lock()
+        let isActive = active
+        let sink = outputSink
+        lock.unlock()
+
+        guard isActive else { return }
+        if let sink {
+            sink(data)
+            return
+        }
+
         Task { @MainActor [weak owner, generation] in
             owner?.appendOutput(data, generation: generation)
         }

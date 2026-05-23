@@ -17,29 +17,38 @@ struct TerminalScreen: View {
     @State private var selectedBackendID: String?
     @State private var didStart = false
     @State private var terminalGridSize = TerminalGridSize(cols: 80, rows: 24)
+    @State private var terminalSurfaceSize: CGSize = .zero
     @State private var ghosttyRenderer = GhosttyTerminalRenderer()
     @State private var nativeRendererHasOutput = false
     @State private var showConfigSheet = false
     @AppStorage("litter.terminal.fontSize") private var storedFontSize: Double = 13.0
     @AppStorage("litter.terminal.themeId") private var storedThemeId: String = "litter-dark"
     @AppStorage("litter.terminal.cursorBlink") private var storedCursorBlink: Bool = true
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
     private let accent = Color(red: 0, green: 1, blue: 0.612)
     private let alleycatServerIdPrefix = "alleycat:"
 
     var body: some View {
-        ZStack(alignment: .top) {
-            terminalSurface
-            backendBar
+        GeometryReader { geometry in
+            let terminalInsets = terminalHorizontalInsets(for: geometry)
+
+            VStack(spacing: 0) {
+                terminalNavigationBar(topInset: geometry.safeAreaInsets.top)
+                backendBar
+                terminalSurface(
+                    contentLeadingInset: terminalInsets.leading,
+                    contentTrailingInset: terminalInsets.trailing
+                )
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+            .background(Color.black)
         }
         .background(Color.black.ignoresSafeArea())
+        .ignoresSafeArea(.container, edges: [.top, .bottom, .horizontal])
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .navigationTitle("Terminal")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark, for: .navigationBar)
-        .toolbarBackground(Color.black, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             attachOutputSink()
             guard !didStart else { return }
@@ -69,8 +78,6 @@ struct TerminalScreen: View {
                 for: nil
             )
             controller.setOutputSink(nil)
-            ghosttyRenderer.setFocused(false)
-            ghosttyRenderer.setOccluded(true)
             controller.close()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -85,6 +92,51 @@ struct TerminalScreen: View {
         }
     }
 
+    private func terminalNavigationBar(topInset: CGFloat) -> some View {
+        ZStack {
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 54, height: 54)
+                        .background(Color.white.opacity(0.09))
+                        .clipShape(Circle())
+                        .overlay {
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
+
+                Spacer(minLength: 0)
+            }
+
+            Text("Terminal")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, topInset + 8)
+        .frame(height: topInset + 86)
+        .background(Color.black)
+    }
+
+    private func terminalHorizontalInsets(for geometry: GeometryProxy) -> (leading: CGFloat, trailing: CGFloat) {
+        let leading = max(geometry.safeAreaInsets.leading, 0)
+        let trailing = max(geometry.safeAreaInsets.trailing, 0)
+        guard UIDevice.current.userInterfaceIdiom == .phone,
+              leading == 0,
+              trailing == 0,
+              geometry.size.width > geometry.size.height else {
+            return (leading, trailing)
+        }
+        return (58, 58)
+    }
+
     private var selectedBackend: TerminalBackendOption? {
         backendOptions.first { $0.id == selectedBackendID } ?? backendOptions.first
     }
@@ -95,10 +147,9 @@ struct TerminalScreen: View {
 
     private func attachOutputSink() {
         let renderer = ghosttyRenderer
+        let outputSink = renderer.makeOutputSink()
         controller.setOutputSink { data in
-            Task { @MainActor in
-                renderer.write(data)
-            }
+            outputSink(data)
         }
     }
 
@@ -156,6 +207,7 @@ struct TerminalScreen: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
         .background(Color.black)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -167,7 +219,14 @@ struct TerminalScreen: View {
                 fontSize: $storedFontSize,
                 themeId: $storedThemeId,
                 cursorBlink: $storedCursorBlink,
-                onApply: { applyConfigSettings() }
+                onApply: { fontSize, themeId, cursorBlink in
+                    applyConfigSettings(
+                        fontSize: fontSize,
+                        themeId: themeId,
+                        cursorBlink: cursorBlink,
+                        regrid: true
+                    )
+                }
             )
         }
     }
@@ -187,88 +246,127 @@ struct TerminalScreen: View {
         .clipShape(Capsule())
     }
 
-    private var terminalSurface: some View {
+    private func terminalSurface(
+        contentLeadingInset: CGFloat,
+        contentTrailingInset: CGFloat
+    ) -> some View {
         GeometryReader { geometry in
+            let leadingInset = max(contentLeadingInset, 0)
+            let trailingInset = max(contentTrailingInset, 0)
+            let contentWidth = max(1, geometry.size.width - leadingInset - trailingInset)
+            let contentSize = CGSize(width: contentWidth, height: geometry.size.height)
+            let background = terminalSurfaceBackground
+
             ZStack(alignment: .topLeading) {
-                GhosttyTerminalView(
-                    renderer: ghosttyRenderer,
-                    onNativeOutputVisibilityChanged: { visible in
-                        nativeRendererHasOutput = visible
-                    },
-                    onInput: { data in
-                        Task { await controller.send(data) }
-                    },
-                    onClearTapped: {
-                        controller.clearOutput()
-                        ghosttyRenderer.clearScreen()
-                        nativeRendererHasOutput = false
-                    },
-                    onSendToAssistant: sendOutputToAssistant,
-                    onFontSizePinched: { newSize in
-                        storedFontSize = newSize
-                        applyConfigSettings()
-                    },
-                    fontSize: storedFontSize
-                )
+                Rectangle()
+                    .fill(background)
+                    .frame(
+                        width: geometry.size.width,
+                        height: geometry.size.height,
+                        alignment: .topLeading
+                    )
+
+                ZStack(alignment: .topLeading) {
+                    GhosttyTerminalView(
+                        renderer: ghosttyRenderer,
+                        onNativeOutputVisibilityChanged: { visible in
+                            nativeRendererHasOutput = visible
+                        },
+                        onInput: { data in
+                            Task { await controller.send(data) }
+                        },
+                        onClearTapped: {
+                            controller.clearOutput()
+                            ghosttyRenderer.clearScreen()
+                            nativeRendererHasOutput = false
+                        },
+                        onSendToAssistant: sendOutputToAssistant,
+                        onFontSizePinched: { newSize in
+                            storedFontSize = newSize
+                            applyConfigSettings(
+                                fontSize: newSize,
+                                themeId: storedThemeId,
+                                cursorBlink: storedCursorBlink,
+                                regrid: true
+                            )
+                        },
+                        fontSize: storedFontSize
+                    )
+                    .frame(
+                        width: contentWidth,
+                        height: geometry.size.height,
+                        alignment: .topLeading
+                    )
+                    .background(background)
+
+                    if shouldShowStatusOverlay {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(displayText)
+                                .font(.custom("SFMono-Regular", size: storedFontSize))
+                                .foregroundColor(phaseColor)
+                                .textSelection(.enabled)
+                            if let challenge = controller.sshTrustChallenge {
+                                Button {
+                                    Task { await controller.trustUnknownSshHostAndRetry() }
+                                } label: {
+                                    Label("Trust \(challenge.fingerprint)", systemImage: "key.fill")
+                                        .font(.custom("SFMono-Regular", size: 12))
+                                        .foregroundColor(.black)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .padding(.horizontal, 10)
+                                        .frame(height: 32)
+                                        .background(accent)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                    }
+                }
                 .frame(
-                    width: geometry.size.width,
+                    width: contentWidth,
                     height: geometry.size.height,
                     alignment: .topLeading
                 )
-                .background(Color.black)
-
-                if shouldShowStatusOverlay {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(displayText)
-                            .font(.custom("SFMono-Regular", size: storedFontSize))
-                            .foregroundColor(phaseColor)
-                            .textSelection(.enabled)
-                        if let challenge = controller.sshTrustChallenge {
-                            Button {
-                                Task { await controller.trustUnknownSshHostAndRetry() }
-                            } label: {
-                                Label("Trust \(challenge.fingerprint)", systemImage: "key.fill")
-                                    .font(.custom("SFMono-Regular", size: 12))
-                                    .foregroundColor(.black)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .padding(.horizontal, 10)
-                                    .frame(height: 32)
-                                    .background(accent)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .padding(.top, TerminalChrome.backendBarHeight)
-                }
+                .offset(x: leadingInset)
             }
             .frame(
                 width: geometry.size.width,
                 height: geometry.size.height,
                 alignment: .topLeading
             )
-            .background(Color.black)
+            .background(background)
             .onAppear {
-                applyConfigSettings()
-                resizeTerminal(for: geometry.size)
-            }
-            .onChange(of: geometry.size) { _, size in
-                resizeTerminal(for: size)
-            }
-            .onChange(of: storedFontSize) { _, _ in
-                applyConfigSettings()
-                // Font size change re-grids the PTY but the SwiftUI size
-                // didn't move — re-evaluate against the same geometry on
-                // the next frame so the new cell metrics propagate.
+                updateTerminalContentSize(contentSize)
                 DispatchQueue.main.async {
-                    resizeTerminal(for: geometry.size)
+                    applyConfigSettings()
                 }
+            }
+            .onChange(of: contentSize) { _, size in
+                updateTerminalContentSize(size)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func updateTerminalContentSize(_ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        DispatchQueue.main.async {
+            if terminalSurfaceSize != size {
+                terminalSurfaceSize = size
+            }
+            scheduleTerminalRegrid(for: size)
+        }
+    }
+
+    private var terminalSurfaceBackground: Color {
+        if storedThemeId == TerminalThemeChoice.litterDark.rawValue {
+            return Color(hex: "#282C34")
+        }
+        return Color(hex: themePalette(preset: TerminalThemeChoice.preset(forId: storedThemeId)).background)
     }
 
     private var displayText: String {
@@ -374,15 +472,10 @@ struct TerminalScreen: View {
     /// hasn't yet reported metrics (first frame of attach).
     private func resizeTerminal(for size: CGSize) {
         let scale = UIScreen.main.scale
-        let metrics = ghosttyRenderer.cellMetrics()
         let grid: TerminalGridSize
-        if let metrics, metrics.cellWidthPx > 0, metrics.cellHeightPx > 0 {
-            grid = TerminalGridSize(
-                size: size,
-                contentScale: scale,
-                cellWidthPx: CGFloat(metrics.cellWidthPx),
-                cellHeightPx: CGFloat(metrics.cellHeightPx)
-            )
+        if let metrics = ghosttyRenderer.surfaceMetrics(),
+           TerminalGridSize.metricsAreCurrent(metrics, for: size, contentScale: scale) {
+            grid = TerminalGridSize(metrics: metrics)
         } else {
             grid = TerminalGridSize(estimatedFor: size, fontSize: storedFontSize)
         }
@@ -503,20 +596,44 @@ struct TerminalScreen: View {
     }
 
     private func applyConfigSettings() {
+        applyConfigSettings(
+            fontSize: storedFontSize,
+            themeId: storedThemeId,
+            cursorBlink: storedCursorBlink
+        )
+    }
+
+    private func applyConfigSettings(
+        fontSize: Double,
+        themeId: String,
+        cursorBlink: Bool,
+        regrid: Bool = false
+    ) {
         let config = TerminalConfig(
-            theme: TerminalThemeChoice.preset(forId: storedThemeId),
+            theme: TerminalThemeChoice.preset(forId: themeId),
             fontFamily: "SFMono-Regular",
-            fontSizePt: Float(storedFontSize),
+            fontSizePt: Float(fontSize),
             cursorStyle: .bar,
-            cursorBlink: storedCursorBlink,
+            cursorBlink: cursorBlink,
             scrollbackLines: 10_000
         )
         ghosttyRenderer.applyConfig(config)
+        if regrid {
+            scheduleTerminalRegrid()
+        }
     }
-}
 
-private enum TerminalChrome {
-    static let backendBarHeight: CGFloat = 51
+    private func scheduleTerminalRegrid(for explicitSize: CGSize? = nil) {
+        let size = explicitSize ?? terminalSurfaceSize
+        guard size.width > 0, size.height > 0 else { return }
+        for delay in [0.0, 0.05, 0.16, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let latestSize = terminalSurfaceSize
+                guard latestSize.width > 0, latestSize.height > 0 else { return }
+                resizeTerminal(for: latestSize)
+            }
+        }
+    }
 }
 
 private enum TerminalThemeChoice: String, CaseIterable, Identifiable {
@@ -557,48 +674,91 @@ private struct TerminalConfigSheet: View {
     @Binding var fontSize: Double
     @Binding var themeId: String
     @Binding var cursorBlink: Bool
-    let onApply: () -> Void
+    let onApply: (Double, String, Bool) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var draftFontSize: Double
+    @State private var draftThemeId: String
+    @State private var draftCursorBlink: Bool
+    @State private var appliedForDismiss = false
+
+    init(
+        fontSize: Binding<Double>,
+        themeId: Binding<String>,
+        cursorBlink: Binding<Bool>,
+        onApply: @escaping (Double, String, Bool) -> Void
+    ) {
+        self._fontSize = fontSize
+        self._themeId = themeId
+        self._cursorBlink = cursorBlink
+        self.onApply = onApply
+        self._draftFontSize = State(initialValue: fontSize.wrappedValue)
+        self._draftThemeId = State(initialValue: themeId.wrappedValue)
+        self._draftCursorBlink = State(initialValue: cursorBlink.wrappedValue)
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Font") {
-                    HStack {
+                    Stepper(value: $draftFontSize, in: 10...24, step: 1) {
+                        HStack {
+                            Text("Size")
+                                .font(.custom("SFMono-Regular", size: 13))
+                            Spacer()
+                            Text("\(Int(draftFontSize)) pt")
+                                .font(.custom("SFMono-Regular", size: 13))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Slider(
+                        value: $draftFontSize,
+                        in: 10...24,
+                        step: 1
+                    ) {
                         Text("Size")
-                            .font(.custom("SFMono-Regular", size: 13))
-                        Spacer()
-                        Text("\(Int(fontSize)) pt")
-                            .font(.custom("SFMono-Regular", size: 13))
-                            .foregroundColor(.secondary)
                     }
-                    Slider(value: $fontSize, in: 10...24, step: 1) {
-                        Text("Font size")
-                    }
-                    .onChange(of: fontSize) { _, _ in onApply() }
+                }
+                .onChange(of: draftFontSize) { _, _ in
+                    applyDraft()
                 }
                 Section("Theme") {
-                    Picker("Theme", selection: $themeId) {
+                    Picker("Theme", selection: $draftThemeId) {
                         ForEach(TerminalThemeChoice.allCases) { choice in
                             Text(choice.title).tag(choice.id)
                         }
                     }
                     .pickerStyle(.inline)
-                    .onChange(of: themeId) { _, _ in onApply() }
+                    .onChange(of: draftThemeId) { _, _ in applyDraft() }
                 }
                 Section("Cursor") {
-                    Toggle("Blink", isOn: $cursorBlink)
-                        .onChange(of: cursorBlink) { _, _ in onApply() }
+                    Toggle("Blink", isOn: $draftCursorBlink)
+                        .onChange(of: draftCursorBlink) { _, _ in applyDraft() }
                 }
             }
             .navigationTitle("Terminal")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        applyDraft()
+                        appliedForDismiss = true
+                        dismiss()
+                    }
+                }
+            }
+            .onDisappear {
+                if !appliedForDismiss {
+                    applyDraft()
                 }
             }
         }
+    }
+
+    private func applyDraft() {
+        fontSize = draftFontSize
+        themeId = draftThemeId
+        cursorBlink = draftCursorBlink
+        onApply(draftFontSize, draftThemeId, draftCursorBlink)
     }
 }
 
@@ -694,6 +854,25 @@ private struct TerminalGridSize: Equatable {
     init(cols: UInt16, rows: UInt16) {
         self.cols = cols
         self.rows = rows
+    }
+
+    init(metrics: LitterGhosttySurfaceMetrics) {
+        cols = UInt16(max(20, min(240, Int(metrics.columns))))
+        rows = UInt16(max(4, min(120, Int(metrics.rows))))
+    }
+
+    static func metricsAreCurrent(
+        _ metrics: LitterGhosttySurfaceMetrics,
+        for size: CGSize,
+        contentScale: CGFloat
+    ) -> Bool {
+        guard metrics.cellWidthPx > 0, metrics.cellHeightPx > 0 else { return false }
+        let expectedWidth = Int(round(max(0, size.width * contentScale)))
+        let expectedHeight = Int(round(max(0, size.height * contentScale)))
+        let actualWidth = Int(metrics.widthPx)
+        let actualHeight = Int(metrics.heightPx)
+        return abs(actualWidth - expectedWidth) <= 2
+            && abs(actualHeight - expectedHeight) <= 2
     }
 
     /// Derive cols/rows from the live cell metrics Ghostty reports. Pixel

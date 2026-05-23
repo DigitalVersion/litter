@@ -24,6 +24,8 @@ final class GhosttyTerminalRenderer {
     private var backendBridge: GhosttyRendererBackendBridge?
     private var bellListener: TerminalRendererBellListener?
     private var pendingOutput: [Data] = []
+    private var pendingWriteBuffer = Data()
+    private var outputFlushScheduled = false
     private weak var attachedView: UIView?
     private var hasNativeVisibleOutput = false
     private var didSetConfigDir = false
@@ -77,7 +79,6 @@ final class GhosttyTerminalRenderer {
 
     func resize(width: CGFloat, height: CGFloat, scale: CGFloat) {
         terminal?.resize(toWidth: width, height: height, scale: scale)
-        renderer?.notifyNeedsDraw()
     }
 
     func setGridSize(cols: UInt16, rows: UInt16) {
@@ -85,8 +86,9 @@ final class GhosttyTerminalRenderer {
     }
 
     func write(_ data: Data) {
+        guard !isInvalidated else { return }
         guard !data.isEmpty else { return }
-        guard let terminal else {
+        guard terminal != nil else {
             pendingOutput.append(data)
             if pendingOutput.count > 256 {
                 pendingOutput.removeFirst(pendingOutput.count - 256)
@@ -97,14 +99,16 @@ final class GhosttyTerminalRenderer {
         // handing them to Ghostty. `feed_output` runs the OSC state
         // machine and notifies any subscribed listeners (semantic state,
         // bell).
-        renderer?.feedOutput(bytes: data)
-        terminal.writeOutput(data)
-        renderer?.notifyNeedsDraw()
-        updateNativeOutputVisibility(terminal: terminal)
+        enqueueOutput(data)
     }
 
-    func draw() {
-        terminal?.draw()
+    func makeOutputSink() -> (Data) -> Void {
+        let batcher = GhosttyTerminalOutputBatcher { [weak self] data in
+            self?.write(data)
+        }
+        return { data in
+            batcher.append(data)
+        }
     }
 
     func setOccluded(_ occluded: Bool) {
@@ -192,8 +196,6 @@ final class GhosttyTerminalRenderer {
                     height: view.bounds.height,
                     scale: view.window?.screen.scale ?? UIScreen.main.scale
                 )
-            } else {
-                renderer.notifyNeedsDraw()
             }
         } catch {
             // Surface lifecycle race or invalid path; let user retry from sheet.
@@ -239,6 +241,13 @@ final class GhosttyTerminalRenderer {
         renderer?.cellMetrics()
     }
 
+    func surfaceMetrics() -> LitterGhosttySurfaceMetrics? {
+        guard let terminal else { return nil }
+        let metrics = terminal.surfaceMetrics()
+        guard metrics.cellWidthPx > 0, metrics.cellHeightPx > 0 else { return nil }
+        return metrics
+    }
+
     func linkAtPoint(x: CGFloat, y: CGFloat) -> TerminalLink? {
         renderer?.linkAtPoint(xPx: Float(x), yPx: Float(y))
     }
@@ -269,6 +278,8 @@ final class GhosttyTerminalRenderer {
         terminal = nil
         attachedView = nil
         pendingOutput.removeAll()
+        pendingWriteBuffer.removeAll(keepingCapacity: false)
+        outputFlushScheduled = false
         didSetConfigDir = false
         setNativeOutputVisible(false)
     }
@@ -280,16 +291,54 @@ final class GhosttyTerminalRenderer {
             return
         }
         terminal.writeOutput(Data([0x1B, 0x63]))
-        terminal.draw()
+        pendingWriteBuffer.removeAll(keepingCapacity: true)
+        outputFlushScheduled = false
         setNativeOutputVisible(false)
     }
 
     private func flushPendingOutput() {
+        guard !isInvalidated else { return }
         guard let terminal else { return }
         for data in pendingOutput {
-            terminal.writeOutput(data)
+            enqueueOutput(data)
         }
         pendingOutput.removeAll()
+        flushOutputBuffer()
+        updateNativeOutputVisibility(terminal: terminal)
+    }
+
+    private func enqueueOutput(_ data: Data) {
+        guard !isInvalidated else { return }
+        pendingWriteBuffer.append(data)
+        scheduleOutputFlush()
+    }
+
+    private func scheduleOutputFlush() {
+        guard !outputFlushScheduled else { return }
+        outputFlushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(8)) { [weak self] in
+            self?.flushOutputBuffer()
+        }
+    }
+
+    private func flushOutputBuffer() {
+        outputFlushScheduled = false
+        guard !isInvalidated else {
+            pendingWriteBuffer.removeAll(keepingCapacity: false)
+            return
+        }
+        guard !pendingWriteBuffer.isEmpty else { return }
+        guard let terminal else {
+            pendingOutput.append(pendingWriteBuffer)
+            pendingWriteBuffer.removeAll(keepingCapacity: true)
+            return
+        }
+
+        let data = pendingWriteBuffer
+        pendingWriteBuffer.removeAll(keepingCapacity: true)
+        renderer?.feedOutput(bytes: data)
+        terminal.writeOutput(data)
+        updateNativeOutputVisibility(terminal: terminal)
     }
 
     private func updateNativeOutputVisibility(terminal: LitterGhosttyTerminal) {
@@ -304,6 +353,48 @@ final class GhosttyTerminalRenderer {
         guard hasNativeVisibleOutput != value else { return }
         hasNativeVisibleOutput = value
         onNativeOutputVisibilityChanged?(value)
+    }
+}
+
+private final class GhosttyTerminalOutputBatcher: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var scheduled = false
+    private let flush: @MainActor (Data) -> Void
+
+    init(flush: @escaping @MainActor (Data) -> Void) {
+        self.flush = flush
+    }
+
+    func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+        var shouldSchedule = false
+        lock.lock()
+        buffer.append(data)
+        if !scheduled {
+            scheduled = true
+            shouldSchedule = true
+        }
+        lock.unlock()
+
+        if shouldSchedule {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(8)) { [weak self] in
+                self?.flushNow()
+            }
+        }
+    }
+
+    private func flushNow() {
+        lock.lock()
+        let data = buffer
+        buffer.removeAll(keepingCapacity: true)
+        scheduled = false
+        lock.unlock()
+
+        guard !data.isEmpty else { return }
+        Task { @MainActor [flush] in
+            flush(data)
+        }
     }
 }
 
@@ -374,9 +465,7 @@ struct GhosttyTerminalView: UIViewRepresentable {
         let renderer = uiView.renderer
         uiView.teardownForDismissal()
         uiView.renderer = nil
-        DispatchQueue.main.async {
-            renderer?.invalidate()
-        }
+        renderer?.invalidate()
     }
 }
 
@@ -432,6 +521,8 @@ final class LitterGhosttyInputView: UIView, UIKeyInput, UITextInputTraits {
     private func configure() {
         isOpaque = false
         backgroundColor = .clear
+        tintColor = .clear
+        clipsToBounds = true
         accessibilityLabel = "Terminal input"
     }
 
@@ -1032,15 +1123,14 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
         keyboardOverlay.translatesAutoresizingMaskIntoConstraints = false
         addSubview(keyboardOverlay)
         NSLayoutConstraint.activate([
-            keyboardOverlay.topAnchor.constraint(equalTo: topAnchor),
-            keyboardOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
-            keyboardOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
-            keyboardOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+            keyboardOverlay.topAnchor.constraint(equalTo: topAnchor, constant: -9999),
+            keyboardOverlay.leadingAnchor.constraint(equalTo: leadingAnchor, constant: -9999),
+            keyboardOverlay.widthAnchor.constraint(equalToConstant: 1),
+            keyboardOverlay.heightAnchor.constraint(equalToConstant: 1),
         ])
-        // The overlay is a bare UIView (transparent by default) — it only
-        // exists to be first responder + own the accessory bar. Its
-        // `hitTest` override returns nil so touches fall through to the
-        // host view's gesture recognizers.
+        // The input view only needs to be in the responder chain. Keeping
+        // it tiny and far offscreen prevents UIKit's text input adornments
+        // from drawing a caret over the terminal surface.
         keyboardOverlay.accessoryBar = accessoryBar
 
         selectionOverlay.translatesAutoresizingMaskIntoConstraints = false
@@ -1420,7 +1510,9 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
             renderer?.setFocused(true)
             _ = focusTerminalInput()
         } else {
-            parkForTemporaryDetach()
+            if !isDismantled {
+                parkForTemporaryDetach()
+            }
         }
     }
 
@@ -1448,12 +1540,11 @@ final class GhosttyHostView: UIView, UIGestureRecognizerDelegate, UIEditMenuInte
         keyboardOverlay.resignFirstResponder()
         endEditing(true)
         _ = resignFirstResponder()
-        renderer?.setFocused(false)
-        renderer?.setOccluded(true)
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        guard !isDismantled else { return }
         let scale = contentScale
         renderer?.resize(width: bounds.width, height: bounds.height, scale: scale)
         selectionOverlay.setContentScale(scale)

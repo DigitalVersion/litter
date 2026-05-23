@@ -5,6 +5,7 @@
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 #include <atomic>
+#include <cstdio>
 #include <mutex>
 #include <string>
 
@@ -27,6 +28,7 @@ struct AndroidGhosttySurface {
     uint32_t width = 1;
     uint32_t height = 1;
     float scale = 1.0f;
+    bool rendered_during_tick = false;
 
     // Input callback (Ghostty -> Kotlin). Captured via nativeSetInputCallback.
     // The Kotlin side is a `GhosttyInputCallback` fun interface with `onInput(ByteArray)`.
@@ -165,14 +167,49 @@ bool makeCurrent(AndroidGhosttySurface* state) {
     return true;
 }
 
-void renderSurface(AndroidGhosttySurface* state) {
+void drawSurface(AndroidGhosttySurface* state) {
     if (state == nullptr || state->surface == nullptr || !makeCurrent(state)) {
         return;
     }
-    ghostty_app_tick(state->app);
-    ghostty_surface_render(state->surface);
     ghostty_surface_draw(state->surface);
     eglSwapBuffers(state->display, state->egl_surface);
+}
+
+bool tickApp(AndroidGhosttySurface* state) {
+    if (state == nullptr || state->app == nullptr) {
+        return false;
+    }
+    state->rendered_during_tick = false;
+    ghostty_app_tick(state->app);
+    return state->rendered_during_tick;
+}
+
+void applyFontSizeAction(AndroidGhosttySurface* state, ghostty_config_t config) {
+    if (state == nullptr || state->surface == nullptr || config == nullptr) {
+        return;
+    }
+
+    float font_size = 0.0f;
+    if (!ghostty_config_get(config, &font_size, "font-size", sizeof("font-size") - 1)) {
+        return;
+    }
+
+    char action[64];
+    const int action_len = std::snprintf(
+        action,
+        sizeof(action),
+        "set_font_size:%g",
+        static_cast<double>(font_size)
+    );
+    if (action_len <= 0 || static_cast<size_t>(action_len) >= sizeof(action)) {
+        return;
+    }
+
+    ghostty_surface_binding_action(
+        state->surface,
+        action,
+        static_cast<uintptr_t>(action_len)
+    );
 }
 
 struct AttachedEnv {
@@ -273,10 +310,26 @@ void androidGhosttyWakeup(void* userdata) {
 }
 
 bool androidGhosttyAction(ghostty_app_t app, ghostty_target_s target, ghostty_action_s action) {
-    (void)app;
-    (void)target;
-    (void)action;
-    return false;
+    if (action.tag != GHOSTTY_ACTION_RENDER) {
+        return false;
+    }
+
+    AndroidGhosttySurface* state = nullptr;
+    if (target.tag == GHOSTTY_TARGET_SURFACE && target.target.surface != nullptr) {
+        state = static_cast<AndroidGhosttySurface*>(
+            ghostty_surface_userdata(target.target.surface)
+        );
+    }
+    if (state == nullptr && app != nullptr) {
+        state = static_cast<AndroidGhosttySurface*>(ghostty_app_userdata(app));
+    }
+    if (state == nullptr) {
+        return false;
+    }
+
+    drawSurface(state);
+    state->rendered_during_tick = true;
+    return true;
 }
 
 bool androidGhosttyReadClipboard(void* userdata, ghostty_clipboard_e clipboard, void* request) {
@@ -473,7 +526,7 @@ Java_com_litter_android_core_bridge_GhosttyRendererBridge_nativeCreateAndroidSur
     ghostty_surface_set_focus(state->surface, true);
     ghostty_surface_set_content_scale(state->surface, state->scale, state->scale);
     ghostty_surface_set_size(state->surface, state->width, state->height);
-    renderSurface(state);
+    ghostty_surface_refresh(state->surface);
     return reinterpret_cast<jlong>(state);
 }
 
@@ -512,7 +565,7 @@ Java_com_litter_android_core_bridge_GhosttyRendererBridge_nativeResizeAndroidSur
         state->width,
         state->height
     );
-    renderSurface(state);
+    ghostty_surface_refresh(state->surface);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -525,7 +578,17 @@ Java_com_litter_android_core_bridge_GhosttyRendererBridge_nativeDrawAndroidSurfa
     if (state == nullptr || state->surface == nullptr) {
         return;
     }
-    renderSurface(state);
+    drawSurface(state);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_litter_android_core_bridge_GhosttyRendererBridge_nativeTickAndroidSurface(
+    JNIEnv* /* env */,
+    jobject /* thiz */,
+    jlong handle
+) {
+    AndroidGhosttySurface* state = fromHandle(handle);
+    return tickApp(state) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -552,7 +615,6 @@ Java_com_litter_android_core_bridge_GhosttyRendererBridge_nativeWriteAndroidSurf
         static_cast<uintptr_t>(len)
     );
     env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
-    renderSurface(state);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -991,9 +1053,11 @@ Java_com_litter_android_core_bridge_GhosttyRendererBridge_nativeApplyConfig(
     }
     ghostty_app_update_config(state->app, config);
     ghostty_surface_update_config(state->surface, config);
+    applyFontSizeAction(state, config);
     ghostty_surface_set_content_scale(state->surface, state->scale, state->scale);
     ghostty_surface_set_size(state->surface, state->width, state->height);
-    renderSurface(state);
+    ghostty_surface_render(state->surface);
+    eglSwapBuffers(state->display, state->egl_surface);
     ghostty_config_free(config);
     env->ReleaseStringUTFChars(path, path_cstr);
     return JNI_TRUE;

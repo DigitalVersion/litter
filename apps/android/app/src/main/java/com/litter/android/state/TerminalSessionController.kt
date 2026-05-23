@@ -46,7 +46,9 @@ class TerminalSessionController(
     var sessionId: String? = null
         private set
     private var listener: TerminalOutputListener? = null
+    @Volatile
     private var outputByteSink: ((ByteArray) -> Unit)? = null
+    @Volatile
     private var eventGeneration: Int = 0
     private var terminalCols: UShort = 80u
     private var terminalRows: UShort = 24u
@@ -89,6 +91,12 @@ class TerminalSessionController(
                 }
                 val outputListener = object : TerminalOutputListener {
                     override fun onBytes(data: ByteArray) {
+                        if (generation != eventGeneration) return
+                        val sink = outputByteSink
+                        if (sink != null) {
+                            sink(data.copyOf())
+                            return
+                        }
                         scope.launch(Dispatchers.Main.immediate) {
                             if (generation == eventGeneration) {
                                 appendOutput(data)
@@ -225,7 +233,9 @@ class TerminalSessionController(
     }
 
     private fun appendOutput(data: ByteArray) {
-        outputByteSink?.invoke(data.copyOf())
+        val sink = outputByteSink
+        sink?.invoke(data.copyOf())
+        if (sink != null) return
         output += data.toString(Charsets.UTF_8)
         trimOutputIfNeeded()
     }

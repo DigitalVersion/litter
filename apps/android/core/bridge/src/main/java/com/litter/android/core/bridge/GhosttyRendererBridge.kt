@@ -102,6 +102,8 @@ object GhosttyRendererBridge {
 
     private external fun nativeDrawAndroidSurface(handle: Long)
 
+    private external fun nativeTickAndroidSurface(handle: Long): Boolean
+
     private external fun nativeWriteAndroidSurface(handle: Long, data: ByteArray)
 
     private external fun nativeSetInputCallback(handle: Long, callback: GhosttyInputCallback?)
@@ -176,6 +178,12 @@ object GhosttyRendererBridge {
             val active = handle
             if (active == 0L) return
             nativeDrawAndroidSurface(active)
+        }
+
+        fun tick(): Boolean {
+            val active = handle
+            if (active == 0L) return false
+            return nativeTickAndroidSurface(active)
         }
 
         fun write(data: ByteArray) {

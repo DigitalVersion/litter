@@ -961,6 +961,7 @@ private struct HomeNavigationView: View {
                         cwd: preferredTerminalWorkingDirectory(),
                         preferredAlleycatNodeId: preferredAlleycatNodeId
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }

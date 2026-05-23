@@ -6,7 +6,6 @@ import android.graphics.Color
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
-import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
 import android.view.Choreographer
@@ -66,6 +65,7 @@ import com.litter.android.core.bridge.GhosttyWakeupListener
 import com.litter.android.state.ActiveTerminalRegistry
 import com.litter.android.state.TerminalSessionController
 import com.litter.android.ui.LitterTheme
+import java.io.ByteArrayOutputStream
 import java.io.File
 import uniffi.codex_mobile_client.TerminalBellListener
 import uniffi.codex_mobile_client.TerminalCellMetrics
@@ -315,6 +315,8 @@ private class GhosttyAndroidSurfaceView(
     var onFontSizeChanged: ((Float) -> Unit)? = null,
 ) : SurfaceView(context), SurfaceHolder.Callback {
     private val pendingBytes = ArrayDeque<ByteArray>()
+    private val outputLock = Any()
+    private val outputBuffer = ByteArrayOutputStream()
     private var rendererSurface: GhosttyRendererBridge.GhosttyRendererSurface? = null
     private var terminalRenderer: TerminalRenderer? = null
     private var backendBridge: GhosttyRendererBackendBridge? = null
@@ -325,6 +327,8 @@ private class GhosttyAndroidSurfaceView(
     private var rendererUnavailableReported = false
     private var didSetConfigDir = false
     private var pendingConfig: TerminalConfig? = null
+    @Volatile
+    private var outputFlushScheduled = false
 
     /// Selection state — mirrors the BackendBridge's stored range so
     /// Compose can observe it directly. Pushed by `setSelectionOverlay`
@@ -360,7 +364,14 @@ private class GhosttyAndroidSurfaceView(
 
     private val frameCallback = Choreographer.FrameCallback {
         frameScheduled = false
-        rendererSurface?.draw()
+        val renderedByTick = rendererSurface?.tick() == true
+        if (!renderedByTick) {
+            rendererSurface?.draw()
+        }
+    }
+
+    private val outputFlushRunnable = Runnable {
+        flushTerminalBytesOnViewThread()
     }
 
     private val scaleGestureDetector = ScaleGestureDetector(
@@ -565,11 +576,17 @@ private class GhosttyAndroidSurfaceView(
         widthPx = width.coerceAtLeast(1)
         heightPx = height.coerceAtLeast(1)
         rendererSurface?.resize(widthPx, heightPx, scale) ?: createRendererSurface(holder)
+        scheduleFrame()
         onMetricsChanged?.invoke(cellMetrics())
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         stopFrameLoop()
+        removeCallbacks(outputFlushRunnable)
+        synchronized(outputLock) {
+            outputBuffer.reset()
+            outputFlushScheduled = false
+        }
         terminalRenderer?.let { ActiveTerminalRegistry.unregister(it) }
         terminalRenderer?.detach()
         terminalRenderer?.close()
@@ -583,15 +600,28 @@ private class GhosttyAndroidSurfaceView(
 
     fun writeTerminalBytes(bytes: ByteArray) {
         if (bytes.isEmpty()) return
-        val ownedBytes = bytes.copyOf()
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            post { writeTerminalBytesOnViewThread(ownedBytes) }
-            return
+        var shouldSchedule = false
+        synchronized(outputLock) {
+            outputBuffer.write(bytes)
+            if (!outputFlushScheduled) {
+                outputFlushScheduled = true
+                shouldSchedule = true
+            }
         }
-        writeTerminalBytesOnViewThread(ownedBytes)
+        if (shouldSchedule) {
+            postDelayed(outputFlushRunnable, 8L)
+        }
     }
 
-    private fun writeTerminalBytesOnViewThread(bytes: ByteArray) {
+    private fun flushTerminalBytesOnViewThread() {
+        val bytes = synchronized(outputLock) {
+            val data = outputBuffer.toByteArray()
+            outputBuffer.reset()
+            outputFlushScheduled = false
+            data
+        }
+        if (bytes.isEmpty()) return
+
         val activeRenderer = rendererSurface
         if (activeRenderer != null) {
             // Tee bytes through the Rust OSC parser + bell detector before

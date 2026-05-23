@@ -58,17 +58,17 @@ pub trait TerminalRendererBackend: Send + Sync {
     /// blocked while invisible.
     fn set_occlusion(&self, occluded: bool);
 
-    /// Ask the platform to perform exactly one draw. The platform should
-    /// call `ghostty_app_tick` + `ghostty_surface_draw` once on its UI
-    /// thread and return.
+    /// Ask the platform to advance its native terminal render loop once.
+    /// Android routes draw work through this because its EGL context is
+    /// owned by the view thread. UIKit Ghostty surfaces render on Ghostty's
+    /// renderer thread, so iOS only drains the app mailbox on main.
     fn request_redraw(&self);
 
-    /// Hot-apply the ghostty config at `path` to the surface. Platform runs
-    /// the standard 5-call sequence
+    /// Hot-apply the ghostty config at `path`. Platform runs
+    /// the active-surface sequence
     /// (`ghostty_config_new` → `ghostty_config_load_file` →
-    /// `ghostty_config_finalize` → `ghostty_app_update_config` →
-    /// `ghostty_surface_update_config` → `ghostty_config_free`)
-    /// on the UI thread.
+    /// `ghostty_config_finalize` → `ghostty_surface_update_config` →
+    /// `ghostty_config_free`) on the UI/graphics thread.
     fn apply_config_file(&self, path: String);
 
     /// Forward a translated key event to `ghostty_surface_key`.
@@ -181,7 +181,7 @@ impl TerminalRenderer {
 
     /// Render the provided config to a ghostty.conf file under the
     /// platform-supplied config dir, then ask the backend to hot-apply it
-    /// via the standard 5-call sequence. Returns
+    /// through the embedded Ghostty surface. Returns
     /// [`TerminalError::Backend`] if the file couldn't be written or if
     /// `set_config_dir` was never called.
     pub fn apply_config(&self, config: TerminalConfig) -> Result<(), TerminalError> {

@@ -25,8 +25,6 @@ typedef struct {
 - (void)resizeToWidth:(CGFloat)width height:(CGFloat)height scale:(CGFloat)scale;
 - (void)writeOutput:(NSData *)data;
 - (NSString *)visibleText;
-- (void)draw;
-- (void)requestRedraw;
 - (void)setOcclusion:(BOOL)occluded;
 - (void)setFocused:(BOOL)focused;
 - (BOOL)applyConfigAtPath:(NSString *)path error:(NSError **)error;

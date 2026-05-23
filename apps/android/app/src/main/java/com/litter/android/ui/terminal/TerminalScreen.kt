@@ -195,7 +195,8 @@ fun TerminalScreen(
         val activeThreadKey = appSnapshot?.activeThread
         TerminalAccessoryRow(
             controller = controller,
-            canSendToAssistant = controller.output.isNotEmpty() && activeThreadKey != null,
+            canSendToAssistant = activeThreadKey != null &&
+                (nativeRendererAvailable || controller.output.isNotEmpty()),
             onSendToAssistant = {
                 val key = activeThreadKey ?: return@TerminalAccessoryRow
                 val selection = ActiveTerminalRegistry.readSelection()
@@ -230,6 +231,9 @@ private fun TerminalConfigSheet(
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
+    var draftFontSize by remember(TerminalConfigPrefs.fontSize) {
+        mutableStateOf(TerminalConfigPrefs.fontSize)
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -260,15 +264,18 @@ private fun TerminalConfigSheet(
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
-                        text = "${TerminalConfigPrefs.fontSize.toInt()} pt",
+                        text = "${draftFontSize.toInt()} pt",
                         color = LitterTheme.textMuted,
                         fontFamily = LitterTheme.monoFont,
                         fontSize = 13.sp,
                     )
                 }
                 Slider(
-                    value = TerminalConfigPrefs.fontSize,
-                    onValueChange = { TerminalConfigPrefs.setFontSize(context, it) },
+                    value = draftFontSize,
+                    onValueChange = { draftFontSize = it },
+                    onValueChangeFinished = {
+                        TerminalConfigPrefs.setFontSize(context, draftFontSize)
+                    },
                     valueRange = 10f..24f,
                     steps = 13,
                 )

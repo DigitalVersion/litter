@@ -1,6 +1,7 @@
 #import "GhosttyBridge.h"
 
 #import <QuartzCore/QuartzCore.h>
+#import <math.h>
 
 #define GHOSTTY_STATIC 1
 #import "ghostty.h"
@@ -19,13 +20,16 @@ static dispatch_queue_t LitterGhosttyDestroyQueue(void);
 
 @interface LitterGhosttyTerminal ()
 @property (nonatomic, weak) UIView *view;
+- (void)draw;
 @end
 
 @implementation LitterGhosttyTerminal {
     ghostty_config_t _config;
     ghostty_app_t _app;
     ghostty_surface_t _surface;
-    CADisplayLink *_displayLink;
+    uint32_t _lastPixelWidth;
+    uint32_t _lastPixelHeight;
+    CGFloat _lastScale;
     BOOL _invalidated;
 }
 
@@ -121,14 +125,6 @@ static dispatch_queue_t LitterGhosttyDestroyQueue(void);
     ghostty_surface_set_focus(_surface, true);
     [self resizeToWidth:view.bounds.size.width height:view.bounds.size.height scale:surfaceConfig.scale_factor];
 
-    // CADisplayLink is created paused so the renderer's draw cadence
-    // (driven from Rust via `requestRedraw`) is the single source of
-    // truth for when to swap pixels. Phase B-selection may re-enable it
-    // during active drag animations; otherwise we draw on demand.
-    _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayLinkTick:)];
-    _displayLink.paused = YES;
-    [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-
     return self;
 }
 
@@ -142,8 +138,6 @@ static dispatch_queue_t LitterGhosttyDestroyQueue(void);
     }
     _invalidated = YES;
 
-    [_displayLink invalidate];
-    _displayLink = nil;
     self.inputHandler = nil;
     _view = nil;
 
@@ -179,11 +173,21 @@ static dispatch_queue_t LitterGhosttyDestroyQueue(void);
     CGFloat resolvedScale = scale > 0 ? scale : UIScreen.mainScreen.scale;
     uint32_t pixelWidth = (uint32_t)MAX(1.0, floor(width * resolvedScale));
     uint32_t pixelHeight = (uint32_t)MAX(1.0, floor(height * resolvedScale));
+    BOOL sizeChanged = pixelWidth != _lastPixelWidth
+        || pixelHeight != _lastPixelHeight
+        || fabs(resolvedScale - _lastScale) > 0.0001;
+
     LitterGhosttyResizeBackingLayers(_view, resolvedScale);
     ghostty_surface_set_content_scale(_surface, resolvedScale, resolvedScale);
     ghostty_surface_set_size(_surface, pixelWidth, pixelHeight);
-    ghostty_surface_refresh(_surface);
-    ghostty_surface_render(_surface);
+    _lastPixelWidth = pixelWidth;
+    _lastPixelHeight = pixelHeight;
+    _lastScale = resolvedScale;
+
+    if (sizeChanged) {
+        ghostty_surface_refresh(_surface);
+        ghostty_surface_render(_surface);
+    }
 }
 
 - (void)writeOutput:(NSData *)data {
@@ -192,7 +196,6 @@ static dispatch_queue_t LitterGhosttyDestroyQueue(void);
     }
 
     ghostty_surface_write(_surface, data.bytes, data.length);
-    ghostty_surface_refresh(_surface);
     ghostty_surface_render(_surface);
 }
 
@@ -225,28 +228,11 @@ static dispatch_queue_t LitterGhosttyDestroyQueue(void);
 }
 
 - (void)draw {
-    if (_surface == NULL) {
+    if (_app == NULL) {
         return;
     }
 
     ghostty_app_tick(_app);
-    ghostty_surface_draw(_surface);
-}
-
-- (void)displayLinkTick:(CADisplayLink *)displayLink {
-    (void)displayLink;
-    [self draw];
-}
-
-- (void)requestRedraw {
-    if (![NSThread isMainThread]) {
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf draw];
-        });
-        return;
-    }
-    [self draw];
 }
 
 - (void)setOcclusion:(BOOL)occluded {
@@ -456,11 +442,21 @@ static ghostty_input_key_e LitterGhosttyKeyToGhosttyKey(LitterGhosttyKey key) {
     ghostty_config_finalize(config);
     ghostty_app_update_config(_app, config);
     ghostty_surface_update_config(_surface, config);
+    float fontSize = 0.0f;
+    if (ghostty_config_get(config, &fontSize, "font-size", 9)) {
+        NSString *actionString = [NSString stringWithFormat:@"set_font_size:%g", fontSize];
+        const char *action = actionString.UTF8String;
+        (void)ghostty_surface_binding_action(
+            _surface,
+            action,
+            [actionString lengthOfBytesUsingEncoding:NSUTF8StringEncoding]
+        );
+    }
     if (_view != nil) {
         CGFloat scale = _view.window.screen.scale ?: UIScreen.mainScreen.scale;
         [self resizeToWidth:_view.bounds.size.width height:_view.bounds.size.height scale:scale];
     }
-    [self draw];
+    ghostty_surface_render(_surface);
     ghostty_config_free(config);
     return YES;
 }
@@ -469,6 +465,18 @@ static ghostty_input_key_e LitterGhosttyKeyToGhosttyKey(LitterGhosttyKey key) {
 
 static void LitterGhosttyResizeBackingLayers(UIView *view, CGFloat scale) {
     CGRect bounds = view.bounds;
+    view.contentScaleFactor = scale;
+    view.layer.frame = bounds;
+    view.layer.contentsScale = scale;
+    view.layer.needsDisplayOnBoundsChange = YES;
+    if ([view.layer isKindOfClass:CAMetalLayer.class]) {
+        CAMetalLayer *metalLayer = (CAMetalLayer *)view.layer;
+        metalLayer.contentsScale = scale;
+        metalLayer.drawableSize = CGSizeMake(
+            MAX(1.0, floor(bounds.size.width * scale)),
+            MAX(1.0, floor(bounds.size.height * scale))
+        );
+    }
     for (CALayer *layer in view.layer.sublayers) {
         layer.frame = bounds;
         layer.contentsScale = scale;
@@ -480,7 +488,12 @@ static dispatch_queue_t LitterGhosttyDestroyQueue(void) {
     static dispatch_queue_t queue;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        queue = dispatch_queue_create("com.sigkitten.litter.ghostty.destroy", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(
+            DISPATCH_QUEUE_SERIAL,
+            QOS_CLASS_UTILITY,
+            0
+        );
+        queue = dispatch_queue_create("com.sigkitten.litter.ghostty.destroy", attr);
     });
     return queue;
 }

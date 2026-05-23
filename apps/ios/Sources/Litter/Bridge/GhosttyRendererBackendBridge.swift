@@ -46,14 +46,19 @@ final class GhosttyRendererBackendBridge: TerminalRendererBackend, @unchecked Se
     }
 
     func requestRedraw() {
-        // `LitterGhosttyTerminal.requestRedraw` already hops to main.
-        terminal?.requestRedraw()
+        // UIKit Ghostty surfaces render through Ghostty's own renderer thread.
+        // Ghostty's wakeup callback drains the app mailbox; this Rust-side
+        // renderer callback only exists for Android's app-thread EGL path.
     }
 
     func applyConfigFile(path: String) {
         let terminal = self.terminal
-        DispatchQueue.main.async {
+        if Thread.isMainThread {
             try? terminal?.applyConfig(atPath: path)
+        } else {
+            DispatchQueue.main.async {
+                try? terminal?.applyConfig(atPath: path)
+            }
         }
     }
 
