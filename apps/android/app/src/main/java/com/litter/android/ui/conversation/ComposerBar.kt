@@ -92,6 +92,8 @@ import com.litter.android.state.ComposerFileAttachment
 import com.litter.android.state.AppComposerPayload
 import com.litter.android.state.VoiceTranscriptionManager
 import com.litter.android.state.ampReasoningEffortLocked
+import com.litter.android.util.LLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import uniffi.codex_mobile_client.AuthStatusRequest
@@ -281,6 +283,8 @@ fun ComposerBar(
 
     // Pending user input answers
     var userInputAnswers by remember { mutableStateOf(mapOf<String, String>()) }
+    var pendingUserInputSubmitError by remember(pendingUserInput?.id) { mutableStateOf<String?>(null) }
+    var isSubmittingPendingUserInput by remember(pendingUserInput?.id) { mutableStateOf(false) }
 
     suspend fun handleGoalCommand(args: String?) {
         val raw = args?.trim().orEmpty()
@@ -741,23 +745,49 @@ fun ComposerBar(
                         )
                     }
                 }
+                pendingUserInputSubmitError?.let { message ->
+                    Text(
+                        text = message,
+                        color = Color(0xFFFF6B6B),
+                        fontSize = LitterTextStyle.caption.scaled,
+                    )
+                }
                 Text(
                     text = "Submit",
-                    color = Color.Black,
+                    color = if (isSubmittingPendingUserInput) LitterTheme.textMuted else Color.Black,
                     fontSize = LitterTextStyle.code.scaled,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
-                        .background(LitterTheme.accent, RoundedCornerShape(8.dp))
-                        .clickable {
+                        .background(
+                            if (isSubmittingPendingUserInput) LitterTheme.surface else LitterTheme.accent,
+                            RoundedCornerShape(8.dp),
+                        )
+                        .clickable(enabled = !isSubmittingPendingUserInput) {
                             scope.launch {
-                                val answers = pendingUserInput.questions.map { q ->
-                                    PendingUserInputAnswer(
-                                        questionId = q.id,
-                                        answers = listOfNotNull(userInputAnswers[q.id]),
+                                isSubmittingPendingUserInput = true
+                                pendingUserInputSubmitError = null
+                                try {
+                                    val answers = pendingUserInput.questions.map { q ->
+                                        PendingUserInputAnswer(
+                                            questionId = q.id,
+                                            answers = listOfNotNull(userInputAnswers[q.id]),
+                                        )
+                                    }
+                                    appModel.store.respondToUserInput(pendingUserInput.id, answers)
+                                    userInputAnswers = emptyMap()
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    LLog.e(
+                                        "ComposerBar",
+                                        "user input response failed",
+                                        error,
+                                        fields = mapOf("requestId" to pendingUserInput.id),
                                     )
+                                    pendingUserInputSubmitError = responseSubmissionErrorMessage(error)
+                                } finally {
+                                    isSubmittingPendingUserInput = false
                                 }
-                                appModel.store.respondToUserInput(pendingUserInput.id, answers)
-                                userInputAnswers = emptyMap()
                             }
                         }
                         .padding(horizontal = 16.dp, vertical = 6.dp),

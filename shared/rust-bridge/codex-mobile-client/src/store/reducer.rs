@@ -1391,6 +1391,19 @@ impl AppStoreReducer {
         }
     }
 
+    pub fn finish_server_mutating_command_failure(&self, server_id: &str, local_request_id: &str) {
+        let mut snapshot = self.snapshot.write().expect("app store lock poisoned");
+        if let Some(server) = snapshot.servers.get_mut(server_id)
+            && server
+                .transport
+                .pending_mutation
+                .as_ref()
+                .is_some_and(|pending| pending.local_request_id == local_request_id)
+        {
+            server.transport.pending_mutation = None;
+        }
+    }
+
     pub fn note_server_direct_request_success(&self, server_id: &str) {
         let mut snapshot = self.snapshot.write().expect("app store lock poisoned");
         if let Some(server) = snapshot.servers.get_mut(server_id) {
@@ -3704,6 +3717,62 @@ mod tests {
         let server = snapshot.servers.get("srv").unwrap();
         assert_eq!(server.agent_runtimes.len(), 1);
         assert_eq!(server.agent_runtimes[0].kind, "opencode".to_string());
+    }
+
+    #[test]
+    fn failed_server_mutating_command_clears_pending_without_marking_success() {
+        let reducer = AppStoreReducer::new();
+        let config = make_server_config("srv");
+        reducer.upsert_server(&config, ServerHealthSnapshot::Connected);
+
+        let request_id = reducer.begin_server_mutating_command(
+            "srv",
+            ServerMutatingCommandKind::ApprovalResponse,
+            "thread",
+        );
+        assert_eq!(
+            reducer.server_pending_mutation_kind("srv"),
+            Some(ServerMutatingCommandKind::ApprovalResponse)
+        );
+
+        reducer.finish_server_mutating_command_failure("srv", &request_id);
+
+        let snapshot = reducer.snapshot();
+        let server = snapshot.servers.get("srv").expect("server exists");
+        assert!(server.transport.pending_mutation.is_none());
+        assert!(server.transport.last_direct_request_ok_at.is_none());
+    }
+
+    #[test]
+    fn stale_server_mutating_failure_does_not_clear_newer_pending_command() {
+        let reducer = AppStoreReducer::new();
+        let config = make_server_config("srv");
+        reducer.upsert_server(&config, ServerHealthSnapshot::Connected);
+
+        let stale_request_id = reducer.begin_server_mutating_command(
+            "srv",
+            ServerMutatingCommandKind::ApprovalResponse,
+            "thread",
+        );
+        let active_request_id = reducer.begin_server_mutating_command(
+            "srv",
+            ServerMutatingCommandKind::UserInputResponse,
+            "thread",
+        );
+
+        reducer.finish_server_mutating_command_failure("srv", &stale_request_id);
+
+        let snapshot = reducer.snapshot();
+        let pending = snapshot
+            .servers
+            .get("srv")
+            .expect("server exists")
+            .transport
+            .pending_mutation
+            .as_ref()
+            .expect("newer pending command survives stale failure");
+        assert_eq!(pending.local_request_id, active_request_id);
+        assert_eq!(pending.kind, ServerMutatingCommandKind::UserInputResponse);
     }
 
     #[test]

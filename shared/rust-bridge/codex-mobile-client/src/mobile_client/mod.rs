@@ -3205,7 +3205,7 @@ impl MobileClient {
             },
             &params.thread_id,
         );
-        let response = self
+        let response_result = self
             .request_typed_for_server::<upstream::TurnStartResponse>(
                 server_id,
                 upstream::ClientRequest::TurnStart {
@@ -3213,8 +3213,12 @@ impl MobileClient {
                     params: direct_params,
                 },
             )
-            .await
-            .map_err(|error| {
+            .await;
+        let response = match response_result {
+            Ok(response) => response,
+            Err(error) => {
+                self.app_store
+                    .finish_server_mutating_command_failure(server_id, &direct_command_id);
                 if let Some(overlay_id) = optimistic_overlay_id.as_ref() {
                     self.app_store
                         .remove_local_overlay_item(&thread_key, overlay_id);
@@ -3223,8 +3227,9 @@ impl MobileClient {
                     self.app_store
                         .remove_thread_follow_up_draft(&thread_key, &draft.preview.id);
                 }
-                RpcError::Deserialization(error)
-            })?;
+                return Err(RpcError::Deserialization(error));
+            }
+        };
         self.app_store
             .finish_server_mutating_command_success(server_id, &direct_command_id);
         if let Some(overlay_id) = optimistic_overlay_id.as_ref() {
@@ -3274,20 +3279,25 @@ impl MobileClient {
             ServerMutatingCommandKind::SteerQueuedFollowUp,
             &key.thread_id,
         );
-        self.request_typed_for_server::<upstream::TurnSteerResponse>(
-            &key.server_id,
-            upstream::ClientRequest::TurnSteer {
-                request_id: upstream::RequestId::Integer(crate::next_request_id()),
-                params: upstream::TurnSteerParams {
-                    thread_id: key.thread_id.clone(),
-                    input: draft.inputs,
-                    responsesapi_client_metadata: None,
-                    expected_turn_id: active_turn_id,
+        if let Err(error) = self
+            .request_typed_for_server::<upstream::TurnSteerResponse>(
+                &key.server_id,
+                upstream::ClientRequest::TurnSteer {
+                    request_id: upstream::RequestId::Integer(crate::next_request_id()),
+                    params: upstream::TurnSteerParams {
+                        thread_id: key.thread_id.clone(),
+                        input: draft.inputs,
+                        responsesapi_client_metadata: None,
+                        expected_turn_id: active_turn_id,
+                    },
                 },
-            },
-        )
-        .await
-        .map_err(RpcError::Deserialization)?;
+            )
+            .await
+        {
+            self.app_store
+                .finish_server_mutating_command_failure(&key.server_id, &direct_command_id);
+            return Err(RpcError::Deserialization(error));
+        }
         self.app_store
             .finish_server_mutating_command_success(&key.server_id, &direct_command_id);
         // Keep draft visible as PendingSteer; TurnCompleted will clean it up.
@@ -3456,11 +3466,6 @@ impl MobileClient {
             .app_store
             .pending_approval_seed(&approval.server_id, &approval.id);
         let session = self.get_session(&approval.server_id)?;
-        let direct_command_id = self.app_store.begin_server_mutating_command(
-            &approval.server_id,
-            ServerMutatingCommandKind::ApprovalResponse,
-            approval.thread_id.as_deref().unwrap_or(""),
-        );
         let response_json = approval_response_json(&approval, approval_seed.as_ref(), decision)?;
         let response_request_id =
             server_request_id_json(approval_request_id(&approval, approval_seed.as_ref()));
@@ -3474,9 +3479,19 @@ impl MobileClient {
                 })
             })
             .unwrap_or_else(|| "codex".to_string());
-        session
+        let direct_command_id = self.app_store.begin_server_mutating_command(
+            &approval.server_id,
+            ServerMutatingCommandKind::ApprovalResponse,
+            approval.thread_id.as_deref().unwrap_or(""),
+        );
+        if let Err(error) = session
             .respond_for_runtime(runtime_kind, response_request_id, response_json)
-            .await?;
+            .await
+        {
+            self.app_store
+                .finish_server_mutating_command_failure(&approval.server_id, &direct_command_id);
+            return Err(error);
+        }
         self.app_store
             .finish_server_mutating_command_success(&approval.server_id, &direct_command_id);
         debug!(
@@ -3505,20 +3520,25 @@ impl MobileClient {
                 PendingUserInputResponseKind::McpServerElicitation
             )
         {
-            let direct_command_id = self.app_store.begin_server_mutating_command(
-                &request.server_id,
-                ServerMutatingCommandKind::UserInputResponse,
-                &request.thread_id,
-            );
             let response_json = mcp_elicitation_response_json(seed, &answers)?;
             let response_request_id = server_request_id_json(seed.request_id.clone());
             let runtime_kind = self.runtime_for_thread(&ThreadKey {
                 server_id: request.server_id.clone(),
                 thread_id: request.thread_id.clone(),
             });
-            session
+            let direct_command_id = self.app_store.begin_server_mutating_command(
+                &request.server_id,
+                ServerMutatingCommandKind::UserInputResponse,
+                &request.thread_id,
+            );
+            if let Err(error) = session
                 .respond_for_runtime(runtime_kind, response_request_id, response_json)
-                .await?;
+                .await
+            {
+                self.app_store
+                    .finish_server_mutating_command_failure(&request.server_id, &direct_command_id);
+                return Err(error);
+            }
             self.app_store
                 .finish_server_mutating_command_success(&request.server_id, &direct_command_id);
             debug!(
@@ -3534,11 +3554,6 @@ impl MobileClient {
             );
             return Ok(());
         }
-        let direct_command_id = self.app_store.begin_server_mutating_command(
-            &request.server_id,
-            ServerMutatingCommandKind::UserInputResponse,
-            &request.thread_id,
-        );
         let response = upstream::ToolRequestUserInputResponse {
             answers: normalized_answers
                 .into_iter()
@@ -3570,9 +3585,19 @@ impl MobileClient {
             server_id: request.server_id.clone(),
             thread_id: request.thread_id.clone(),
         });
-        session
+        let direct_command_id = self.app_store.begin_server_mutating_command(
+            &request.server_id,
+            ServerMutatingCommandKind::UserInputResponse,
+            &request.thread_id,
+        );
+        if let Err(error) = session
             .respond_for_runtime(runtime_kind, response_request_id, response_json)
-            .await?;
+            .await
+        {
+            self.app_store
+                .finish_server_mutating_command_failure(&request.server_id, &direct_command_id);
+            return Err(error);
+        }
         self.app_store
             .finish_server_mutating_command_success(&request.server_id, &direct_command_id);
         debug!(
