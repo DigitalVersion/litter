@@ -117,7 +117,7 @@ pub(crate) async fn open(
     let shell_override = shell.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let cwd_arg = cwd.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let channel = client
-        .open_terminal_channel(size.cols, size.rows, shell_override, cwd_arg)
+        .open_terminal_channel(size.cols, size.rows, shell_override, cwd_arg, Some(&host))
         .await
         .map_err(|error| map_ssh_error(error, &normalized, pinned_fingerprint.as_deref()))?;
 

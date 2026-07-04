@@ -8,7 +8,6 @@ use russh::client::Msg;
 
 use super::{SshClient, SshError, append_bridge_info_log};
 
-const DEFAULT_TMUX_SESSION: &str = "litter";
 
 impl SshClient {
     /// Open a session channel, request a PTY of the given grid size with the
@@ -22,6 +21,7 @@ impl SshClient {
         rows: u16,
         shell: Option<&str>,
         cwd: Option<&str>,
+        host: Option<&str>,
     ) -> Result<Channel<Msg>, SshError> {
         let handle = self.handle.lock().await;
         if handle.is_closed() {
@@ -46,7 +46,7 @@ impl SshClient {
             .await
             .map_err(|error| SshError::ConnectionFailed(format!("request pty: {error}")))?;
 
-        let command = build_terminal_command(shell, cwd);
+        let command = build_terminal_command(shell, cwd, host);
         channel
             .exec(true, command.as_bytes())
             .await
@@ -58,14 +58,14 @@ impl SshClient {
             "ssh_terminal_channel_opened cols={} rows={} shell={}",
             cols,
             rows,
-            shell.unwrap_or("tmux:litter")
+            shell.unwrap_or("tmux:codex-litter")
         ));
 
         Ok(channel)
     }
 }
 
-fn build_terminal_command(shell: Option<&str>, cwd: Option<&str>) -> String {
+fn build_terminal_command(shell: Option<&str>, cwd: Option<&str>, host: Option<&str>) -> String {
     if let Some(shell) = shell {
         return match cwd {
             Some(dir) if !dir.is_empty() => format!(
@@ -77,20 +77,41 @@ fn build_terminal_command(shell: Option<&str>, cwd: Option<&str>) -> String {
         };
     }
 
-    let session = super::shell_quote(DEFAULT_TMUX_SESSION);
-    let tmux = match cwd {
-        Some(dir) if !dir.is_empty() => format!(
-            "tmux new-session -A -s {session} -c {}",
-            super::shell_quote(dir)
-        ),
-        _ => format!("tmux new-session -A -s {session}"),
+    let session_name = tmux_session_name(host);
+    let session = super::shell_quote(&session_name);
+    let start_dir = match cwd.map(str::trim).filter(|dir| !dir.is_empty()) {
+        Some(dir) => super::shell_quote(dir),
+        None => "\"$HOME/Central_Command\"".to_string(),
     };
+    let tmux = format!("tmux new-session -A -s {session} -c {start_dir}");
 
-    // Prefer tmux so the remote shell survives mobile disconnects. If tmux is
-    // absent, fall back to the user's login shell behavior instead of failing.
+    // Prefer tmux so the remote shell survives mobile disconnects. Default to
+    // Central_Command when present so Litter lands in the same workspace as Tin.
+    // If tmux is absent, fall back to the user's login shell instead of failing.
     format!(
-        "if command -v tmux >/dev/null 2>&1; then exec {tmux}; else exec \"${{SHELL:-sh}}\"; fi"
+        "if [ ! -d {start_dir} ]; then cd \"$HOME\"; else cd {start_dir}; fi; if command -v tmux >/dev/null 2>&1; then exec {tmux}; else exec \"${{SHELL:-sh}}\"; fi"
     )
+}
+
+fn tmux_session_name(host: Option<&str>) -> String {
+    let short = host
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .and_then(|host| host.split('.').next())
+        .map(|host| {
+            host.chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                        ch
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        })
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "remote".to_string());
+    format!("codex-litter@{short}")
 }
 
 #[cfg(test)]
@@ -99,22 +120,22 @@ mod tests {
 
     #[test]
     fn default_terminal_uses_tmux() {
-        let command = build_terminal_command(None, None);
+        let command = build_terminal_command(None, None, Some("nec.tail7f125e.ts.net"));
         assert!(command.contains("command -v tmux"));
-        assert!(command.contains("exec tmux new-session -A -s litter"));
+        assert!(command.contains("exec tmux new-session -A -s codex-litter@nec"));
         assert!(command.contains("${SHELL:-sh}"));
     }
 
     #[test]
     fn default_terminal_passes_cwd_to_tmux() {
-        let command = build_terminal_command(None, Some("/home/tin/Central Command"));
-        assert!(command.contains("tmux new-session -A -s litter -c '/home/tin/Central Command'"));
+        let command = build_terminal_command(None, Some("/home/tin/Central Command"), Some("nec.tail7f125e.ts.net"));
+        assert!(command.contains("tmux new-session -A -s codex-litter@nec -c '/home/tin/Central Command'"));
     }
 
     #[test]
     fn explicit_shell_preserves_legacy_behavior() {
         assert_eq!(
-            build_terminal_command(Some("/bin/zsh"), Some("/tmp/work")),
+            build_terminal_command(Some("/bin/zsh"), Some("/tmp/work"), Some("nec")),
             "cd /tmp/work && exec /bin/zsh"
         );
     }

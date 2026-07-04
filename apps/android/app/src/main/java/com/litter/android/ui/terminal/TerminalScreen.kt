@@ -56,6 +56,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,6 +84,7 @@ fun TerminalScreen(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val controller = remember { TerminalSessionController(scope) }
     val prootState by AndroidProotBootstrap.state.collectAsState()
@@ -141,6 +143,9 @@ fun TerminalScreen(
             },
             onBack = onBack,
             onConfigClick = { showConfigSheet = true },
+            onCopyMoshLink = selectedBackend?.moshLink?.let { link ->
+                { clipboard.setText(AnnotatedString(link)) }
+            },
         )
 
         controller.errorMessage?.let { message ->
@@ -470,6 +475,7 @@ private fun TerminalHeader(
     onSelectBackend: (TerminalBackendOption) -> Unit,
     onBack: () -> Unit,
     onConfigClick: () -> Unit = {},
+    onCopyMoshLink: (() -> Unit)? = null,
 ) {
     var backendMenuExpanded by remember { mutableStateOf(false) }
     Row(
@@ -539,6 +545,22 @@ private fun TerminalHeader(
             }
         }
         Spacer(Modifier.weight(1f))
+        if (onCopyMoshLink != null) {
+            TextButton(
+                onClick = onCopyMoshLink,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier
+                    .padding(end = 6.dp)
+                    .height(30.dp),
+            ) {
+                Text(
+                    text = "mosh",
+                    color = LitterTheme.accent,
+                    fontFamily = LitterTheme.monoFont,
+                    fontSize = 13.sp,
+                )
+            }
+        }
         TextButton(
             onClick = onConfigClick,
             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
@@ -648,6 +670,7 @@ private data class TerminalBackendOption(
     val alleycatNodeId: String? = null,
     val supportsResize: Boolean,
     val backend: TerminalBackendKind,
+    val moshLink: String? = null,
 )
 
 private fun initialBackendId(
@@ -712,11 +735,12 @@ private fun loadBackendOptions(
         if (!seenSshKeys.add(key)) return@forEach
         val credential = sshCredentialStore.load(host, sshPort) ?: return@forEach
         val auth = credential.toTerminalSshAuth() ?: return@forEach
+        val sessionName = tinTmuxSessionName(host)
         options.add(
             TerminalBackendOption(
                 id = "ssh-$key",
                 title = saved.name.trim().ifEmpty { "${credential.username}@$host" },
-                runningLabel = "ssh shell",
+                runningLabel = sessionName,
                 icon = Icons.Outlined.Storage,
                 supportsResize = true,
                 backend = TerminalBackendKind.RemoteSsh(
@@ -728,6 +752,7 @@ private fun loadBackendOptions(
                     acceptUnknownHost = false,
                     cwd = null,
                 ),
+                moshLink = "mosh ${credential.username}@$host -- tmux attach -t $sessionName",
             ),
         )
     }
@@ -745,6 +770,15 @@ private fun SavedSshCredential.toTerminalSshAuth(): TerminalSshAuth? = when (met
 
 private fun normalized(value: String?): String? =
     value?.trim()?.takeIf { it.isNotEmpty() }
+
+private fun tinTmuxSessionName(host: String): String {
+    val shortHost = host.trim()
+        .substringBefore('.')
+        .map { ch -> if (ch.isLetterOrDigit() || ch == '-' || ch == '_') ch else '-' }
+        .joinToString("")
+        .ifBlank { "remote" }
+    return "codex-litter@$shortHost"
+}
 
 private fun terminalEmptyMessage(
     prootState: AndroidProotBootstrap.BootstrapState,
