@@ -2,19 +2,6 @@ name: Android Debug APK (YOLO)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main, yolo-tmux ]
-    paths:
-      - 'apps/android/**'
-      - 'shared/rust-bridge/**'
-      - 'patches/codex/**'
-      - 'patches/ghostty/**'
-      - 'shared/third_party/codex/**'
-      - 'shared/third_party/ghostty'
-      - 'tools/scripts/**'
-      - 'Makefile'
-      - '.gitmodules'
-      - '.github/workflows/android-debug-apk-yolo.yml'
 
 concurrency:
   group: android-debug-apk-yolo-${{ github.ref }}
