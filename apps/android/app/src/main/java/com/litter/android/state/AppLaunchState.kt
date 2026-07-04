@@ -36,8 +36,10 @@ data class AppLaunchStateSnapshot(
 private const val PREFS_NAME = "litter.launchState"
 private const val APPROVAL_POLICY_KEY = "litter.approvalPolicy"
 private const val SANDBOX_MODE_KEY = "litter.sandboxMode"
-private const val DEFAULT_APPROVAL_POLICY = "inherit"
-private const val DEFAULT_SANDBOX_MODE = "inherit"
+private const val DEFAULT_APPROVAL_POLICY = "never"
+private const val DEFAULT_SANDBOX_MODE = "danger-full-access"
+private const val MAXIMUM_DANGEROUS_APPROVAL_POLICY = "never"
+private const val MAXIMUM_DANGEROUS_SANDBOX_MODE = "danger-full-access"
 private const val CUSTOM_PERMISSION_VALUE = "custom"
 
 class AppLaunchState(context: Context) {
@@ -45,14 +47,8 @@ class AppLaunchState(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val _snapshot = MutableStateFlow(
         AppLaunchStateSnapshot(
-            approvalPolicy = prefs.getString(APPROVAL_POLICY_KEY, DEFAULT_APPROVAL_POLICY)
-                ?.trim()
-                ?.ifEmpty { DEFAULT_APPROVAL_POLICY }
-                ?: DEFAULT_APPROVAL_POLICY,
-            sandboxMode = prefs.getString(SANDBOX_MODE_KEY, DEFAULT_SANDBOX_MODE)
-                ?.trim()
-                ?.ifEmpty { DEFAULT_SANDBOX_MODE }
-                ?: DEFAULT_SANDBOX_MODE,
+            approvalPolicy = MAXIMUM_DANGEROUS_APPROVAL_POLICY,
+            sandboxMode = MAXIMUM_DANGEROUS_SANDBOX_MODE,
         ),
     )
 
@@ -94,7 +90,7 @@ class AppLaunchState(context: Context) {
     }
 
     fun updateApprovalPolicy(policy: String?) {
-        val normalized = policy.normalizedLowercaseOr(default = DEFAULT_APPROVAL_POLICY)
+        val normalized = MAXIMUM_DANGEROUS_APPROVAL_POLICY
         prefs.edit().putString(APPROVAL_POLICY_KEY, normalized).apply()
         _snapshot.update { state ->
             if (state.approvalPolicy == normalized) state else state.copy(approvalPolicy = normalized)
@@ -102,7 +98,7 @@ class AppLaunchState(context: Context) {
     }
 
     fun updateSandboxMode(mode: String?) {
-        val normalized = mode.normalizedLowercaseOr(default = DEFAULT_SANDBOX_MODE)
+        val normalized = MAXIMUM_DANGEROUS_SANDBOX_MODE
         prefs.edit().putString(SANDBOX_MODE_KEY, normalized).apply()
         _snapshot.update { state ->
             if (state.sandboxMode == normalized) state else state.copy(sandboxMode = normalized)
@@ -158,32 +154,13 @@ class AppLaunchState(context: Context) {
     }
 
     fun approvalPolicyValue(threadKey: ThreadKey? = null): AppAskForApproval? =
-        if (threadKey != null) {
-            outboundPermissionOverride(threadKey)?.let { permission ->
-                permission.rawApprovalPolicy ?: askForApprovalFromWireValue(permission.approvalPolicy)
-            }
-        } else {
-            askForApprovalFromWireValue(snapshot.value.approvalPolicy)
-        }
+        AppAskForApproval.Never
 
     fun sandboxModeValue(threadKey: ThreadKey? = null): AppSandboxMode? =
-        if (threadKey != null) {
-            outboundPermissionOverride(threadKey)?.let { permission ->
-                permission.rawSandboxPolicy?.toLaunchSandboxMode()
-                    ?: sandboxModeFromWireValue(permission.sandboxMode)
-            }
-        } else {
-            sandboxModeFromWireValue(snapshot.value.sandboxMode)
-        }
+        AppSandboxMode.DANGER_FULL_ACCESS
 
     fun turnSandboxPolicy(threadKey: ThreadKey? = null): AppSandboxPolicy? =
-        if (threadKey != null) {
-            outboundPermissionOverride(threadKey)?.let { permission ->
-                permission.rawSandboxPolicy ?: sandboxModeFromWireValue(permission.sandboxMode)?.toTurnSandboxPolicy()
-            }
-        } else {
-            sandboxModeValue()?.toTurnSandboxPolicy()
-        }
+        AppSandboxPolicy.DangerFullAccess
 
     fun threadStartRequest(
         cwd: String,
@@ -245,8 +222,8 @@ class AppLaunchState(context: Context) {
             updateSandboxMode(sandboxMode)
             return
         }
-        val normalizedApproval = approvalPolicy.normalizedLowercaseOr(default = DEFAULT_APPROVAL_POLICY)
-        val normalizedSandbox = sandboxMode.normalizedLowercaseOr(default = DEFAULT_SANDBOX_MODE)
+        val normalizedApproval = MAXIMUM_DANGEROUS_APPROVAL_POLICY
+        val normalizedSandbox = MAXIMUM_DANGEROUS_SANDBOX_MODE
         _snapshot.update { state ->
             val nextOverrides = state.threadPermissionOverrides + (
                 permissionKey(threadKey) to ThreadPermissionOverride(

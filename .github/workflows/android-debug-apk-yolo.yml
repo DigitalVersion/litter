@@ -1,0 +1,156 @@
+name: Android Debug APK (YOLO)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, yolo-tmux ]
+    paths:
+      - 'apps/android/**'
+      - 'shared/rust-bridge/**'
+      - 'patches/codex/**'
+      - 'patches/ghostty/**'
+      - 'shared/third_party/codex/**'
+      - 'shared/third_party/ghostty'
+      - 'tools/scripts/**'
+      - 'Makefile'
+      - '.gitmodules'
+      - '.github/workflows/android-debug-apk-yolo.yml'
+
+concurrency:
+  group: android-debug-apk-yolo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shared-prep:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync codex submodule
+        run: ./apps/ios/scripts/sync-codex.sh --preserve-current
+
+      - name: Restore generated mobile bindings cache
+        id: mobile-bindings-cache
+        uses: actions/cache@v4
+        with:
+          path: shared/rust-bridge/generated
+          key: yolo-mobile-bindings-${{ runner.os }}-${{ hashFiles('apps/ios/scripts/sync-codex.sh', 'shared/rust-bridge/generate-bindings.sh', 'shared/rust-bridge/Cargo.toml', 'shared/rust-bridge/Cargo.lock', 'shared/rust-bridge/codex-mobile-client/src/**', 'shared/rust-bridge/uniffi-bindgen/**', 'patches/codex/**', 'shared/third_party/codex/codex-rs/app-server-protocol/src/protocol/**', 'shared/third_party/codex/codex-rs/protocol/src/**') }}
+
+      - name: Generate Kotlin bindings
+        if: steps.mobile-bindings-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          cd shared/rust-bridge
+          ./generate-bindings.sh --kotlin-only
+
+      - name: Package shared prep artifact
+        run: |
+          mkdir -p .ci-prep/shared
+          tar -czf .ci-prep/shared/generated-mobile-sources.tgz -C . shared/rust-bridge/generated
+
+      - name: Upload shared prep artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-prep
+          path: .ci-prep/shared
+          if-no-files-found: error
+
+  android-debug-apk:
+    needs: shared-prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platforms and NDK
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;30.0.14904198"
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libcap-dev clang cmake
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Download shared prep artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: shared-prep
+          path: .ci-prep/shared
+
+      - name: Restore shared prep
+        run: |
+          ./apps/ios/scripts/sync-codex.sh --preserve-current
+          tar -xzf .ci-prep/shared/generated-mobile-sources.tgz -C .
+          mkdir -p .build-stamps
+          touch .build-stamps/sync .build-stamps/bindings-kotlin
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Rust JNI libs
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/30.0.14904198
+        run: make rust-android
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: apps/android/gradlew -p apps/android :app:assembleDebug
+
+      - name: Generate checksum
+        run: |
+          APK_PATH="apps/android/app/build/outputs/apk/debug/app-debug.apk"
+          sha256sum "$APK_PATH" > "$APK_PATH.sha256"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: litter-yolo-debug-apk
+          path: |
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          if-no-files-found: error
