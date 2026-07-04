@@ -12,6 +12,7 @@ mod local_ish;
 mod local_proot;
 mod osc;
 mod remote_alleycat;
+mod remote_et;
 mod renderer;
 mod selection;
 mod session;

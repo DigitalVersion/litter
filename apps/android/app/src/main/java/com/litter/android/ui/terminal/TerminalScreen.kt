@@ -72,6 +72,7 @@ import com.litter.android.state.SshAuthMethod
 import com.litter.android.state.SshCredentialStore
 import com.litter.android.state.TerminalSessionController
 import com.litter.android.ui.LitterTheme
+import java.io.File
 import kotlinx.coroutines.launch
 import uniffi.codex_mobile_client.TerminalBackendKind
 import uniffi.codex_mobile_client.TerminalSshAuth
@@ -736,6 +737,30 @@ private fun loadBackendOptions(
         val credential = sshCredentialStore.load(host, sshPort) ?: return@forEach
         val auth = credential.toTerminalSshAuth() ?: return@forEach
         val sessionName = tinTmuxSessionName(host)
+        val etClient = File(context.applicationInfo.nativeLibraryDir, "libet_litter.so")
+        if (etClient.isFile) {
+            options.add(
+                TerminalBackendOption(
+                    id = "et-$key",
+                    title = "ET • ${saved.name.trim().ifEmpty { "${credential.username}@$host" }}",
+                    runningLabel = sessionName,
+                    icon = Icons.Outlined.Storage,
+                    supportsResize = true,
+                    backend = TerminalBackendKind.RemoteEt(
+                        host = host,
+                        sshPort = sshPort.toUShort(),
+                        etPort = 2022u,
+                        username = credential.username,
+                        auth = auth,
+                        acceptUnknownHost = false,
+                        cwd = null,
+                        etClientPath = etClient.absolutePath,
+                        tmuxSession = sessionName,
+                    ),
+                    moshLink = "mosh ${credential.username}@$host -- tmux attach -t $sessionName",
+                ),
+            )
+        }
         options.add(
             TerminalBackendOption(
                 id = "ssh-$key",

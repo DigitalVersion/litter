@@ -39,6 +39,17 @@ pub enum TerminalBackendKind {
         accept_unknown_host: bool,
         cwd: Option<String>,
     },
+    RemoteEt {
+        host: String,
+        ssh_port: u16,
+        et_port: u16,
+        username: String,
+        auth: TerminalSshAuth,
+        accept_unknown_host: bool,
+        cwd: Option<String>,
+        et_client_path: String,
+        tmux_session: Option<String>,
+    },
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]

@@ -60,6 +60,32 @@ pub(crate) async fn open_backend(
             )
             .await
         }
+        TerminalBackendKind::RemoteEt {
+            host,
+            ssh_port,
+            et_port,
+            username,
+            auth,
+            accept_unknown_host,
+            cwd,
+            et_client_path,
+            tmux_session,
+        } => {
+            super::remote_et::open(
+                host,
+                ssh_port,
+                et_port,
+                username,
+                auth,
+                accept_unknown_host,
+                cwd,
+                et_client_path,
+                tmux_session,
+                size,
+                trust_store,
+            )
+            .await
+        }
     }
 }
 

@@ -74,7 +74,7 @@ class TerminalSessionController(
         scope.launch {
             try {
                 val size = TerminalSize(cols = terminalCols, rows = terminalRows)
-                val id = if (backend is TerminalBackendKind.RemoteSsh) {
+                val id = if (backend is TerminalBackendKind.RemoteSsh || backend is TerminalBackendKind.RemoteEt) {
                     val backendImpl = SshTrustStore(AppModel.shared.appContext)
                     val trustStore = TerminalSshTrustStore(backendImpl)
                     appStore.openTerminalSessionWithTrustStore(backend, size, trustStore)
@@ -183,14 +183,22 @@ class TerminalSessionController(
         error: Exception,
         backend: TerminalBackendKind,
     ): SshHostTrustChallenge? {
-        val sshBackend = backend as? TerminalBackendKind.RemoteSsh ?: return null
         val fingerprint = unknownHostFingerprint(error.message.orEmpty()) ?: return null
-        return SshHostTrustChallenge(
-            host = sshBackend.host,
-            port = sshBackend.port,
-            fingerprint = fingerprint,
-            backend = backend,
-        )
+        return when (backend) {
+            is TerminalBackendKind.RemoteSsh -> SshHostTrustChallenge(
+                host = backend.host,
+                port = backend.port,
+                fingerprint = fingerprint,
+                backend = backend,
+            )
+            is TerminalBackendKind.RemoteEt -> SshHostTrustChallenge(
+                host = backend.host,
+                port = backend.sshPort,
+                fingerprint = fingerprint,
+                backend = backend,
+            )
+            else -> null
+        }
     }
 
     private fun unknownHostFingerprint(message: String): String? {
