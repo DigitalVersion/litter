@@ -3,6 +3,9 @@ name: Android Debug APK (YOLO)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: android-debug-apk-yolo-${{ github.ref }}
   cancel-in-progress: true
@@ -128,16 +131,34 @@ jobs:
       - name: Assemble debug APK
         run: apps/android/gradlew -p apps/android :app:assembleDebug
 
-      - name: Generate checksum
+      - name: Package APK
         run: |
-          APK_PATH="apps/android/app/build/outputs/apk/debug/app-debug.apk"
-          sha256sum "$APK_PATH" > "$APK_PATH.sha256"
+          APK_SRC="apps/android/app/build/outputs/apk/debug/app-debug.apk"
+          APK_DST="apps/android/app/build/outputs/apk/debug/litter-yolo-debug-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}.apk"
+          cp "$APK_SRC" "$APK_DST"
+          sha256sum "$APK_DST" > "$APK_DST.sha256"
+          echo "APK_DST=$APK_DST" >> "$GITHUB_ENV"
 
-      - name: Upload debug APK
+      - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: litter-yolo-debug-apk
+          name: litter-yolo-debug-apk-${{ github.run_number }}-${{ github.sha }}
           path: |
-            apps/android/app/build/outputs/apk/debug/app-debug.apk
-            apps/android/app/build/outputs/apk/debug/app-debug.apk.sha256
+            ${{ env.APK_DST }}
+            ${{ env.APK_DST }}.sha256
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: yolo-apk-${{ github.run_number }}
+          name: Litter YOLO APK ${{ github.run_number }}
+          body: |
+            Android debug APK with YOLO permissions and Tin/tmux integration.
+
+            Commit: ${{ github.sha }}
+            Package id: com.sigkitten.litter.android.yolo
+          files: |
+            ${{ env.APK_DST }}
+            ${{ env.APK_DST }}.sha256
+          fail_on_unmatched_files: true

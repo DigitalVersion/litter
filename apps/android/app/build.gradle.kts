@@ -51,6 +51,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".yolo"
+            versionNameSuffix = "-yolo"
+        }
+
         release {
             isMinifyEnabled = false
             proguardFiles(
